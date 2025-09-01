@@ -263,7 +263,9 @@ def respond(query: str):
                     results.append(combo)
         if charts:
             final_chart = alt.vconcat(*charts)
-            return pd.concat(results, ignore_index=True), final_chart, None
+            combined = pd.concat(results, ignore_index=True)
+            combined.index = combined.index + 1  # start from 1 instead of 0
+            return combined, final_chart, None
         else:
             return "No forecast could be generated.", None, None
 
@@ -273,6 +275,7 @@ def respond(query: str):
         if df.empty:
             return "No data found for your filters.", None, None
 
+        df.index = df.index + 1  # start from 1 instead of 0
         melt = df.melt(id_vars=["Company", "Year"], value_vars=mets, var_name="Metric", value_name="Value")
         chart = (
             alt.Chart(melt)
@@ -293,6 +296,7 @@ def respond(query: str):
     if df.empty:
         return "No data found for your filters.", None, None
 
+    df.index = df.index + 1  # start from 1 instead of 0
     melt = df.melt(id_vars=["Company", "Year"], value_vars=mets, var_name="Metric", value_name="Value")
     base_chart = (
         alt.Chart(melt)
