@@ -1,9 +1,31 @@
 import streamlit as st
 import re
+import json
 import pandas as pd
+import numpy as np
 import altair as alt
 
-# ----------------- Financial Data -----------------
+# --- Optional: free LLM via Hugging Face (flan-t5-small) ---
+# This adds light natural-language understanding: synonyms, spelling fixes, JSON parsing.
+try:
+    from transformers import pipeline
+    _HAS_TRANSFORMERS = True
+except Exception:
+    _HAS_TRANSFORMERS = False
+
+@st.cache_resource(show_spinner=False)
+def get_llm():
+    if not _HAS_TRANSFORMERS:
+        return None
+    try:
+        # Small + free model; downloads on first run (HF Spaces is fine)
+        return pipeline("text2text-generation", model="google/flan-t5-small")
+    except Exception:
+        return None
+
+LLM = get_llm()
+
+# ----------------- Financial Data (same as your original) -----------------
 financial_data = [
     {"Company": "Microsoft", "Year": 2022, "Total Revenue": 1.98E11, "Net Income": 72738000000, "Total Assets": 3.65E11,
      "Total Liabilities": 1.98E11, "Cash Flow": 89035000000},
@@ -25,182 +47,280 @@ financial_data = [
      "Total Liabilities": 3.08E11, "Cash Flow": 1.18E11},
 ]
 
-valid_companies = {"Microsoft", "Tesla", "Apple"}
+VALID_COMPANIES = {"Microsoft", "Tesla", "Apple"}
+VALID_METRICS = [
+    "Total Revenue",
+    "Net Income",
+    "Total Assets",
+    "Total Liabilities",
+    "Cash Flow",
+]
 
-# ----------------- Helper Functions -----------------
-def extract_companies(query):
-    companies = []
-    for item in financial_data:
-        if item["Company"].lower() in query.lower():
-            companies.append(item["Company"])
-    return list(set(companies))
+SYNONYMS = {
+    # metric → set of synonyms (lowercase)
+    "Total Revenue": {"revenue", "sales", "turnover", "income from sales"},
+    "Net Income": {"net income", "profit", "earnings", "net profit"},
+    "Total Assets": {"assets", "total assets", "asset"},
+    "Total Liabilities": {"liabilities", "debt", "debts", "obligations"},
+    "Cash Flow": {"cash flow", "cashflow", "operating cash flow", "cash"},
+}
 
-def extract_years(query):
-    years = re.findall(r'\b(20\d{2})\b', query)
+# ----------------- Helper: basic (regex/keyword) parsing -----------------
+def extract_companies_basic(query: str):
+    found = []
+    low = query.lower()
+    for c in VALID_COMPANIES:
+        if c.lower() in low:
+            found.append(c)
+    return list(dict.fromkeys(found))  # unique, keep order
+
+
+def extract_years_basic(query: str):
+    years = re.findall(r"\b(20\d{2})\b", query)
     if len(years) == 2:
-        start_year, end_year = int(years[0]), int(years[1])
-        years_in_range = list(range(start_year, end_year + 1))
-        return years_in_range
-    return [int(year) for year in years] if years else []
+        a, b = int(years[0]), int(years[1])
+        return list(range(min(a, b), max(a, b) + 1))
+    return [int(y) for y in years]
 
-def convert_to_million(value):
-    """Convert numbers to millions for better readability."""
-    if value >= 1E6:
-        return value / 1E6  # Return as numeric value for graph
-    return value
 
-# ----------------- Chatbot Logic -----------------
-def financial_chatbot(query):
-    query_lower = query.lower()
-    companies = extract_companies(query)
-    years = extract_years(query)
+def extract_metrics_basic(query: str):
+    low = query.lower()
+    chosen = []
+    for metric, keys in SYNONYMS.items():
+        if any(k in low for k in keys):
+            chosen.append(metric)
+    # If explicitly asking for "metrics" words like revenue/assets/net income etc.
+    for m in VALID_METRICS:
+        if m.lower() in low and m not in chosen:
+            chosen.append(m)
+    return list(dict.fromkeys(chosen))
 
-    # Handle multiple metrics (assets, revenue, etc.)
-    metrics = []
-    if "revenue" in query_lower:
-        metrics.append("Total Revenue")
-    if "assets" in query_lower:
-        metrics.append("Total Assets")
-    if "net income" in query_lower:
-        metrics.append("Net Income")
-    if "liabilities" in query_lower:
-        metrics.append("Total Liabilities")
-    if "cash flow" in query_lower:
-        metrics.append("Cash Flow")
 
-    # If no valid metric is found, return error message
-    if not metrics:
-        return "⚠️ Sorry, I can only provide info on revenue, net income, assets, liabilities, or cash flow."
-
-    # Check if any unknown companies were mentioned in the query
-    notify_msg = ""
-    if companies:
-        unknown_companies = [company for company in companies if company not in valid_companies]
-        if unknown_companies:
-            notify_msg = f"⚠️ Sorry, I only have data for Microsoft, Tesla, and Apple. Did you mean one of them? Please recheck your spelling if it was a typo."
-
-    if not companies:
-        return notify_msg or "⚠️ Please mention at least one company (Microsoft, Tesla, or Apple)."
-
-    # comparison (multiple companies)
-    if len(companies) >= 2:
-        data_companies = {
-            comp: [item for item in financial_data if item["Company"] == comp and (not years or item["Year"] in years)]
-            for comp in companies
+# ----------------- Helper: LLM-powered parsing -----------------
+def parse_with_llm(query: str):
+    """Try to normalize user query into {companies, years, metrics, forecast} using a tiny free LLM.
+    Returns dict or None if parsing fails.
+    """
+    if LLM is None:
+        return None
+    instruction = (
+        "You extract structured info from a finance question. "
+        "Recognize company names among [Microsoft, Apple, Tesla]; "
+        "map synonyms to metrics among [Total Revenue, Net Income, Total Assets, Total Liabilities, Cash Flow]; "
+        "identify 4-digit years; detect if forecasting is requested (words like forecast/predict/next). "
+        "Return STRICT JSON with keys: companies (list), years (list), metrics (list), forecast (bool), horizon (int). "
+        "If horizon not given, use 2."
+    )
+    prompt = f"{instruction}\nQuestion: {query}\nJSON:"
+    try:
+        out = LLM(prompt, max_new_tokens=128)[0]["generated_text"].strip()
+        # Allow cases where model adds text before/after JSON — try to locate JSON
+        start = out.find("{")
+        end = out.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            out = out[start:end + 1]
+        data = json.loads(out)
+        # Keep only valid values
+        companies = [c for c in data.get("companies", []) if c in VALID_COMPANIES]
+        years = [int(y) for y in data.get("years", []) if str(y).isdigit()]
+        metrics = [m for m in data.get("metrics", []) if m in VALID_METRICS]
+        forecast = bool(data.get("forecast", False))
+        horizon = int(data.get("horizon", 2))
+        return {
+            "companies": companies,
+            "years": years,
+            "metrics": metrics,
+            "forecast": forecast,
+            "horizon": max(1, min(horizon, 5)),  # cap to 5 years
         }
-        if not any(data_companies.values()):
-            return notify_msg or "No data found."
-        all_years = sorted(set([d["Year"] for data in data_companies.values() for d in data]))
-        df = pd.DataFrame({"Year": all_years})
+    except Exception:
+        return None
 
-        # Collect data for all requested metrics
-        for metric in metrics:
-            for comp in companies:
-                df[f"{comp} - {metric} (in millions)"] = [next((d[metric] for d in data_companies[comp] if d["Year"] == y), None) for y in all_years]
-        
-        # Convert the values to millions (numerically) before plotting
-        for col in df.columns[1:]:
-            df[col] = df[col].apply(lambda x: convert_to_million(x) if x is not None else x)
 
-        # Plot the comparison chart
-        df_melt = df.melt("Year", var_name="Company and Metric", value_name="Value")
-        chart = alt.Chart(df_melt).mark_bar().encode(
-            x="Year:O", 
-            y="Value:Q", 
-            color=alt.Color("Year:N", scale=alt.Scale(scheme='category20')),
-            tooltip=["Year", "Company and Metric", alt.Tooltip("Value:Q", title="Value (in millions)")]
+# ----------------- Data utilities -----------------
+def to_millions(value):
+    if value is None:
+        return None
+    try:
+        v = float(value)
+        return v / 1e6
+    except Exception:
+        return None
+
+
+def get_company_year_df(companies, years, metrics):
+    # filter by companies/years
+    rows = [r for r in financial_data if r["Company"] in companies and (not years or r["Year"] in years)]
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    # Keep only needed columns
+    keep = ["Company", "Year"] + metrics
+    df = df[keep]
+    # Convert values to millions
+    for m in metrics:
+        df[m] = df[m].map(to_millions)
+    return df.sort_values(["Company", "Year"]).reset_index(drop=True)
+
+
+# ----------------- Forecasting (simple linear regression) -----------------
+# Note: with only 3 points per company, keep it simple & transparent
+try:
+    from sklearn.linear_model import LinearRegression
+    _HAS_SKLEARN = True
+except Exception:
+    _HAS_SKLEARN = False
+
+
+def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 2):
+    if not _HAS_SKLEARN or df.empty:
+        return None, None
+    sub = df[df["Company"] == company][["Year", metric]].dropna()
+    if len(sub) < 2:
+        return None, None
+    X = sub[["Year"]].values
+    y = sub[metric].values
+    model = LinearRegression().fit(X, y)
+    last_year = int(sub["Year"].max())
+    future_years = np.arange(last_year + 1, last_year + 1 + horizon)
+    y_pred = model.predict(future_years.reshape(-1, 1))
+
+    hist = sub.rename(columns={metric: "Value"}).assign(Type="Actual", Metric=metric)
+    fut = pd.DataFrame({
+        "Company": company,
+        "Year": future_years,
+        "Value": y_pred,
+        "Type": "Forecast",
+        "Metric": metric,
+    })
+    combo = pd.concat([hist, fut], ignore_index=True)
+
+    chart = (
+        alt.Chart(combo)
+        .mark_line(point=True)
+        .encode(
+            x="Year:O",
+            y="Value:Q",
+            color="Type:N",
+            tooltip=["Company", "Metric", "Year", alt.Tooltip("Value:Q", title="Value (mn)")],
         )
-        return (df, chart, notify_msg)
+        .properties(title=f"{company} — {metric} (mn): Actual vs Forecast")
+    )
+    return combo, chart
 
 
-    # single company
+# ----------------- Chatbot core -----------------
+
+def parse_query(query: str):
+    """Combine LLM + basic rules for robust parsing."""
+    parsed = parse_with_llm(query)
+    if parsed:
+        comps = parsed["companies"] or extract_companies_basic(query)
+        yrs = parsed["years"] or extract_years_basic(query)
+        mets = parsed["metrics"] or extract_metrics_basic(query)
+        forecast = parsed["forecast"] or ("forecast" in query.lower() or "predict" in query.lower())
+        horizon = parsed["horizon"]
     else:
-        comp = companies[0]
-        data = [item for item in financial_data if item["Company"] == comp and (not years or item["Year"] in years)]
-        if not data:
-            return notify_msg or "No data found."
-        df = pd.DataFrame({
-            "Year": [d["Year"] for d in data],
-        })
-        
-        # Collect data for all requested metrics
-        for metric in metrics:
-            df[f"{metric} ({comp}) (in millions)"] = [d[metric] for d in data]
+        comps = extract_companies_basic(query)
+        yrs = extract_years_basic(query)
+        mets = extract_metrics_basic(query)
+        forecast = ("forecast" in query.lower() or "predict" in query.lower())
+        horizon = 2
+    return comps, yrs, mets, forecast, horizon
 
-        # Convert the values to millions (numerically) before plotting
-        for col in df.columns[1:]:
-            df[col] = df[col].apply(lambda x: convert_to_million(x) if x is not None else x)
 
-        # Plot the individual company chart
-        chart = alt.Chart(df).mark_bar().encode(
-            x="Year:O", y=f"{metric} ({comp}) (in millions):Q", color="Year:N", tooltip=["Year", f"{metric} ({comp}) (in millions)"]
+def respond(query: str):
+    comps, yrs, mets, do_forecast, horizon = parse_query(query)
+
+    if not mets:
+        return "⚠️ I can provide: revenue, net income, assets, liabilities, or cash flow.", None, None
+    if not comps:
+        return "⚠️ Please mention at least one company (Microsoft, Tesla, or Apple).", None, None
+
+    # Multi-company comparison
+    if len(comps) >= 2:
+        df = get_company_year_df(comps, yrs, mets)
+        if df.empty:
+            return "No data found for your filters.", None, None
+
+        # Melt to long format for multi-metric facet
+        melt = df.melt(id_vars=["Company", "Year"], value_vars=mets, var_name="Metric", value_name="Value")
+        chart = (
+            alt.Chart(melt)
+            .mark_bar()
+            .encode(
+                x="Year:O",
+                y="Value:Q",
+                color="Company:N",
+                column=alt.Column("Metric:N", header=alt.Header(title="Metric")),
+                tooltip=["Company", "Metric", "Year", alt.Tooltip("Value:Q", title="Value (mn)")],
+            )
         )
-        return (df, chart, notify_msg)
+        return df, chart, None
 
-# ----------------- Streamlit App -----------------
-st.set_page_config(page_title="Financial Data Chatbot", page_icon="💬", layout="wide")
+    # Single company (can show multiple metrics + optional forecast)
+    comp = comps[0]
+    df = get_company_year_df([comp], yrs, mets)
+    if df.empty:
+        return "No data found for your filters.", None, None
 
-st.title("💬 Financial Data Chatbot")
+    melt = df.melt(id_vars=["Company", "Year"], value_vars=mets, var_name="Metric", value_name="Value")
+    base_chart = (
+        alt.Chart(melt)
+        .mark_bar()
+        .encode(
+            x="Year:O",
+            y="Value:Q",
+            color="Metric:N",
+            tooltip=["Year", "Metric", alt.Tooltip("Value:Q", title="Value (mn)")],
+        )
+        .properties(title=f"{comp}: {', '.join(mets)} (mn)")
+    )
 
-# ----------------- Description Section -----------------
-st.markdown("""
-### 📊 About This Chatbot
-This chatbot is designed to help you explore the **financial performance** of three major companies from the years 2022, 2023, and 2024:
-- **Microsoft**
-- **Tesla**
-- **Apple**
+    # Forecast: if a single metric is requested, add forecast line
+    if do_forecast and len(mets) == 1:
+        metric = mets[0]
+        combo, fchart = forecast_linear(df, comp, metric, horizon)
+        if fchart is not None:
+            return df, base_chart | fchart, None  # side-by-side charts
 
-The data includes the following metrics:
-- **Total Revenue** – Company’s total income from sales.
-- **Net Income** – Profit after all expenses are deducted.
-- **Total Assets** – Everything the company owns (e.g., buildings, cash, equipment).
-- **Total Liabilities** – Everything the company owes (e.g., loans, debt).
-- **Cash Flow** – The money coming in and out of the business.
+    return df, base_chart, None
 
-### 💡 How to Use
-You can ask questions like:
-- `What is Apple's net income in 2023?`
-- `Compare Microsoft and Tesla revenue`
-- `Show Tesla cash flow over the years`
-- `Give me Apple’s total assets`
 
-👉 You must **specify a company name** in your query.  
-👉 You can also compare multiple companies in one query  
-👉 Please check for spelling errors for better accuracy!
+# ----------------- Streamlit UI -----------------
+st.set_page_config(page_title="Financial Chatbot — LLM + Forecast", page_icon="💬", layout="wide")
+st.title("💬 Financial Data Chatbot — LLM + Forecasting")
 
----
-
-**Note:** Values are displayed in millions.
-""")
-
-st.markdown("Ask me about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for **Microsoft, Tesla, and Apple**.")
+st.markdown(
+    """
+    Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for **Microsoft, Tesla, Apple** (2022–2024). 
+    Try natural questions like *"Apple 2023 profit"*, *"Compare Tesla vs Microsoft sales"*, or *"Forecast Apple revenue next 2 years"*.
+    
+    **Note:** All values shown in **millions**. If spelling is off, the LLM will try to normalize it.
+    """
+)
 
 # Chat history
 if "history" not in st.session_state:
     st.session_state.history = []
 
-# Display chat history
 for q, r in st.session_state.history:
     st.markdown(f"**🧑 You:** {q}")
-    if isinstance(r, tuple):  # response with df + chart + notify
-        df, chart, notify_msg = r
+    if isinstance(r, tuple):
+        df, chart, note = r
         if isinstance(df, pd.DataFrame):
             st.dataframe(df, use_container_width=True)
-
-            # Display the chart
+        if chart is not None:
             st.altair_chart(chart, use_container_width=True)
-
-        if notify_msg:
-            st.info(notify_msg)
+        if note:
+            st.info(note)
     else:
         st.warning(r)
 
-# ✅ Input always at the bottom
-query = st.chat_input("💡 Ask your question here...")
-
+query = st.chat_input("💡 Ask your question here…")
 if query:
-    response = financial_chatbot(query)
-    st.session_state.history.append((query, response))
-    st.rerun()  # refresh to show new message at bottom
+    answer = respond(query)
+    st.session_state.history.append((query, answer))
+    st.rerun()
 
-
+"
