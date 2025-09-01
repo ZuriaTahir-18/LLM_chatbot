@@ -123,13 +123,14 @@ def get_company_year_df(companies, years, metrics):
     return df.sort_values(["Company", "Year"]).reset_index(drop=True)
 
 def add_serial_column(df: pd.DataFrame, reorder_for_forecast: bool = False) -> pd.DataFrame:
-    df2 = df.reset_index(drop=True).copy()
-    df2.insert(0, "S.No", range(1, len(df2) + 1))
+    df2 = df.reset_index(drop=True).copy()  # remove existing index
+    df2.insert(0, "S.No", range(1, len(df2) + 1))  # start S.No from 1
     if reorder_for_forecast:
         desired = ["S.No", "Year", "Metric", "Value", "Company", "Type"]
         existing = [c for c in desired if c in df2.columns]
         df2 = df2[existing]
     return df2
+
 
 # ----------------- Forecasting -----------------
 from sklearn.linear_model import LinearRegression
@@ -281,5 +282,6 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
+
 
 
