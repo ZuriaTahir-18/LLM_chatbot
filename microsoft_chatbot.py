@@ -190,7 +190,13 @@ def parse_query(query: str):
     comps_text = extract_companies_basic(clean)
     mets_text = extract_metrics_basic(clean)
 
+    # Trigger forecast if user explicitly asks or if requested years go beyond available data
+    max_data_year = 2024
     forecast_flag = "forecast" in clean_low or "predict" in clean_low or "next" in clean_low
+    if yrs_text and max(yrs_text) > max_data_year:
+        forecast_flag = True
+        horizon_text = max(yrs_text) - max_data_year
+
     horizon = horizon_text or 2 if forecast_flag else 0
 
     # Year validation
@@ -273,3 +279,4 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
+
