@@ -4,8 +4,6 @@ import json
 import pandas as pd
 import numpy as np
 import altair as alt
-from spellchecker import SpellChecker
-
 
 # --- Optional: free LLM via Hugging Face (flan-t5-small) ---
 try:
@@ -22,7 +20,6 @@ try:
 except Exception:
     _HAS_SPELL = False
 
-
 def correct_spelling(text: str) -> str:
     if not _HAS_SPELL:
         return text
@@ -32,7 +29,6 @@ def correct_spelling(text: str) -> str:
         corrected.append(correction if correction else word)
     return " ".join(corrected)
 
-
 @st.cache_resource(show_spinner=False)
 def get_llm():
     if not _HAS_TRANSFORMERS:
@@ -41,7 +37,6 @@ def get_llm():
         return pipeline("text2text-generation", model="google/flan-t5-small")
     except Exception:
         return None
-
 
 LLM = get_llm()
 
@@ -69,13 +64,7 @@ financial_data = [
 
 VALID_COMPANIES = {"Microsoft", "Tesla", "Apple"}
 VALID_COMPANIES_LOWER = {c.lower() for c in VALID_COMPANIES}
-VALID_METRICS = [
-    "Total Revenue",
-    "Net Income",
-    "Total Assets",
-    "Total Liabilities",
-    "Cash Flow",
-]
+VALID_METRICS = ["Total Revenue", "Net Income", "Total Assets", "Total Liabilities", "Cash Flow"]
 
 SYNONYMS = {
     "Total Revenue": {"revenue", "sales", "turnover", "income from sales"},
@@ -85,20 +74,17 @@ SYNONYMS = {
     "Cash Flow": {"cash flow", "cashflow", "operating cash flow", "cash"},
 }
 
-# ----------------- Basic parsing -----------------
+# ----------------- Parsing helpers -----------------
 def extract_companies_basic(query: str):
-    found = []
-    low = query.lower()
-    for c in VALID_COMPANIES:
-        if c.lower() in low:
-            found.append(c)
-    return list(dict.fromkeys(found))
-
+    return [c for c in VALID_COMPANIES if c.lower() in query.lower()]
 
 def extract_years_basic(query: str):
     years = re.findall(r"\b(20\d{2})\b", query)
     return [int(y) for y in years]
 
+def extract_horizon(query: str):
+    m = re.search(r"next\s+(\d+)\s+year", query.lower())
+    return int(m.group(1)) if m else None
 
 def extract_year_range(query: str):
     query = query.lower()
@@ -111,37 +97,25 @@ def extract_year_range(query: str):
         m = re.search(p, query)
         if m:
             a, b = int(m.group(1)), int(m.group(2))
-            if a > b:
-                a, b = b, a
+            if a > b: a, b = b, a
             return list(range(a, b + 1))
     return None
 
-
-# ----------------- LLM-powered parsing -----------------
-def parse_with_llm(query: str):
-    if LLM is None:
-        return None
-    try:
-        out = LLM(query, max_new_tokens=128)[0]["generated_text"].strip()
-        return json.loads(out)
-    except Exception:
-        return None
-
+def extract_metrics_basic(query: str):
+    low = query.lower()
+    chosen = []
+    for metric, keys in SYNONYMS.items():
+        if any(k in low for k in keys) or metric.lower() in low:
+            chosen.append(metric)
+    return list(dict.fromkeys(chosen))
 
 # ----------------- Data utilities -----------------
 def to_millions(value):
-    if value is None:
-        return None
-    try:
-        return float(value) / 1e6
-    except Exception:
-        return None
-
+    return float(value) / 1e6 if value else None
 
 def get_company_year_df(companies, years, metrics):
     rows = [r for r in financial_data if r["Company"] in companies and (not years or r["Year"] in years)]
-    if not rows:
-        return pd.DataFrame()
+    if not rows: return pd.DataFrame()
     df = pd.DataFrame(rows)
     keep = ["Company", "Year"] + metrics
     df = df[keep]
@@ -149,94 +123,135 @@ def get_company_year_df(companies, years, metrics):
         df[m] = df[m].map(to_millions)
     return df.sort_values(["Company", "Year"]).reset_index(drop=True)
 
-
-def add_serial_column(df: pd.DataFrame) -> pd.DataFrame:
+def add_serial_column(df: pd.DataFrame, reorder_for_forecast: bool = False) -> pd.DataFrame:
     df2 = df.reset_index(drop=True).copy()
     df2.insert(0, "S.No", range(1, len(df2) + 1))
+    if reorder_for_forecast:
+        desired = ["S.No", "Year", "Metric", "Value", "Company", "Type"]
+        existing = [c for c in desired if c in df2.columns]
+        df2 = df2[existing]
     return df2
 
+# ----------------- Forecasting -----------------
+from sklearn.linear_model import LinearRegression
 
-# ----------------- Company & Year Validation -----------------
-def detect_unsupported_companies(query: str, comps_found: list):
-    low = query.lower()
-    for word in re.findall(r"\b[a-zA-Z]+\b", low):
-        if word.lower() not in VALID_COMPANIES_LOWER and word.lower().title() not in comps_found:
-            if word.lower() in {"amazon", "google", "meta"}:  # obvious company names
-                return f"⚠️ Sorry — I only have data for Microsoft, Tesla, and Apple. You asked about: {word.title()}."
-    return None
+def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 2, years_requested: list = None):
+    if df.empty: return None, None
+    full_hist = df[df["Company"] == company][["Year", metric]].dropna().copy()
+    if len(full_hist) < 2: return None, None
 
+    X, y = full_hist[["Year"]].values, full_hist[metric].values
+    model = LinearRegression().fit(X, y)
+    last_year = int(full_hist["Year"].max())
 
-# ----------------- Chatbot core -----------------
+    if years_requested:
+        future_years = sorted([y for y in years_requested if y > last_year])
+    else:
+        future_years = list(range(last_year + 1, last_year + 1 + horizon))
+
+    dataset_max = max(r["Year"] for r in financial_data)
+    future_years = [y for y in future_years if y <= 2034]
+
+    y_pred = model.predict(np.array(future_years).reshape(-1, 1)) if future_years else []
+
+    hist_years = sorted([y for y in years_requested if y <= last_year]) if years_requested else sorted(full_hist["Year"].tolist())
+    hist_list = [{"Company": company, "Year": int(y), "Metric": metric, "Value": full_hist.set_index("Year")[metric][y], "Type": "Actual"} for y in hist_years if y in full_hist["Year"].values]
+
+    fut_list = [{"Company": company, "Year": int(y), "Metric": metric, "Value": float(pred), "Type": "Forecast"} for y, pred in zip(future_years, y_pred)]
+
+    combo = pd.DataFrame(hist_list + fut_list)
+
+    chart = alt.Chart(combo).mark_line(point=True).encode(
+        x="Year:O", y="Value:Q", color="Type:N",
+        tooltip=["Company", "Metric", "Year", alt.Tooltip("Value:Q", title="Value (mn)")]
+    ).properties(title=f"{company} — {metric} (mn): Actual vs Forecast")
+    return combo, chart
+
+# ----------------- Chatbot -----------------
 def parse_query(query: str):
     clean = correct_spelling(query)
-    yrs_range = extract_year_range(clean)
-    yrs = yrs_range or extract_years_basic(clean)
+    clean_low = clean.lower()
+    yrs_range = extract_year_range(clean_low)
+    yrs_text = extract_years_basic(clean_low) if yrs_range is None else yrs_range
+    horizon_text = extract_horizon(clean_low)
+    comps_text = extract_companies_basic(clean)
+    mets_text = extract_metrics_basic(clean)
 
-    # Company & metric extraction
-    comps = extract_companies_basic(clean)
-    mets = [m for m in VALID_METRICS if m.lower() in clean.lower()]
+    forecast_flag = "forecast" in clean_low or "predict" in clean_low or "next" in clean_low
+    horizon = horizon_text or 2 if forecast_flag else 0
 
-    # Validation
-    unsupported_msg = detect_unsupported_companies(clean, comps)
-    if unsupported_msg:
-        return [], [], [], False, 0, unsupported_msg
+    dataset_max = max(r["Year"] for r in financial_data)
+    if yrs_text and max(yrs_text) > dataset_max:
+        if max(yrs_text) > 2034:
+            return [], [], [], False, 0, f"⚠️ I can only forecast up to 2034."
+        forecast_flag = True
 
-    # Year > 2034 check
-    if yrs and max(yrs) > 2034:
-        return [], [], [], False, 0, "⚠️ I can only provide forecasts up to 2034."
+    for c in comps_text:
+        if c not in VALID_COMPANIES:
+            return [], [], [], False, 0, f"⚠️ Sorry, I only have data for Microsoft, Tesla, and Apple."
 
-    forecast_flag = any(y > max(r["Year"] for r in financial_data) for y in yrs) if yrs else False
-    horizon = (max(yrs) - max(r["Year"] for r in financial_data)) if forecast_flag else 0
-
-    return comps, yrs, mets, forecast_flag, horizon, None
-
+    return comps_text, yrs_text, mets_text, forecast_flag, horizon, None
 
 def respond(query: str):
     comps, yrs, mets, do_forecast, horizon, error_msg = parse_query(query)
+    if error_msg: return error_msg, None, None
+    if not mets: return "⚠️ Please specify revenue, net income, assets, liabilities, or cash flow.", None, None
+    if not comps: return "⚠️ Please mention Microsoft, Tesla, or Apple.", None, None
 
-    if error_msg:
-        return error_msg, None, None
-    if not mets:
-        return "⚠️ I can provide: revenue, net income, assets, liabilities, or cash flow.", None, None
-    if not comps:
-        return "⚠️ Please mention at least one company (Microsoft, Tesla, or Apple).", None, None
+    if do_forecast:
+        charts, results = [], []
+        for comp in comps:
+            for metric in mets:
+                df_all = get_company_year_df([comp], None, [metric])
+                combo, fchart = forecast_linear(df_all, comp, metric, horizon, years_requested=yrs)
+                if combo is not None and not combo.empty:
+                    charts.append(fchart); results.append(combo)
+        if results:
+            final_df = add_serial_column(pd.concat(results, ignore_index=True), reorder_for_forecast=True)
+            return final_df, alt.vconcat(*charts), None
+        return "No forecast generated.", None, None
 
     df = get_company_year_df(comps, yrs, mets)
-    if df.empty:
-        return "No data found for your filters.", None, None
-
-    df_out = add_serial_column(df)
+    if df.empty: return "No data found.", None, None
+    df_out = add_serial_column(df, reorder_for_forecast=False)
     melt = df.melt(id_vars=["Company", "Year"], value_vars=mets, var_name="Metric", value_name="Value")
-    chart = (
-        alt.Chart(melt)
-        .mark_bar()
-        .encode(
-            x="Year:O",
-            y="Value:Q",
-            color="Metric:N",
-            tooltip=["Year", "Metric", alt.Tooltip("Value:Q", title="Value (mn)")],
-        )
-    )
+    chart = alt.Chart(melt).mark_bar().encode(
+        x="Year:O", y="Value:Q", color="Company:N" if len(comps) > 1 else "Metric:N",
+        tooltip=["Company", "Metric", "Year", alt.Tooltip("Value:Q", title="Value (mn)")]
+    ).properties(title=f"{', '.join(comps)} — {', '.join(mets)}")
     return df_out, chart, None
 
+# ----------------- UI -----------------
+st.set_page_config(page_title="💬 Financial Chatbot", page_icon="💹", layout="wide")
+st.title("💹 AI-Powered Financial Data Chatbot")
 
-# ----------------- Streamlit UI -----------------
-st.set_page_config(page_title="Financial Chatbot — LLM + Forecast", page_icon="💬", layout="wide")
-st.title("💬 Financial Data Chatbot — LLM + Forecasting")
+st.markdown(
+    """
+    🚀 **Your Smart Finance Assistant**  
+    Ask me about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for  
+    **Microsoft, Tesla, and Apple (2022–2024)** 📊  
 
-if "history" not in st.session_state:
-    st.session_state.history = []
+    🔥 Features:  
+    - **Compare companies instantly** → *"Compare Tesla and Apple revenue"*  
+    - **Forecast up to 2034** → *"Predict Apple assets in 2030"*  
+    - **Custom ranges** → *"Apple net income from 2023 to 2026"*  
+    - **Multi-metrics** → *"Tesla revenue and liabilities next 3 years"*  
+    - **Spelling correction** → *"aape revnue 2024"* ✅  
+
+    ⚡ All values are in **millions**. Future years are predicted using **AI regression**.
+    """
+)
+
+if "history" not in st.session_state: st.session_state.history = []
 
 for q, r in st.session_state.history:
     st.markdown(f"**🧑 You:** {q}")
     if isinstance(r, tuple):
         df, chart, note = r
-        if isinstance(df, pd.DataFrame):
-            st.dataframe(df, use_container_width=True, hide_index=True)  # ✅ hide default 0 index
-        if chart is not None:
-            st.altair_chart(chart, use_container_width=True)
-    else:
-        st.warning(r)
+        if isinstance(df, pd.DataFrame): st.dataframe(df, use_container_width=True)
+        if chart is not None: st.altair_chart(chart, use_container_width=True)
+        if note: st.info(note)
+    else: st.warning(r)
 
 query = st.chat_input("💡 Ask your question here…")
 if query:
