@@ -144,28 +144,43 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     model = LinearRegression().fit(X, y)
     last_year = int(full_hist["Year"].max())
 
+    # 🔹 Always include historical years 2022–2024 in chart
+    hist_years = sorted(full_hist["Year"].tolist())
+
+    # Requested future years
     if years_requested:
         future_years = sorted([y for y in years_requested if y > last_year])
     else:
         future_years = list(range(last_year + 1, last_year + 1 + horizon))
 
-    dataset_max = max(r["Year"] for r in financial_data)
+    # Limit max forecast year
     future_years = [y for y in future_years if y <= 2034]
 
     y_pred = model.predict(np.array(future_years).reshape(-1, 1)) if future_years else []
 
-    hist_years = sorted([y for y in years_requested if y <= last_year]) if years_requested else sorted(full_hist["Year"].tolist())
-    hist_list = [{"Company": company, "Year": int(y), "Metric": metric, "Value": full_hist.set_index("Year")[metric][y], "Type": "Actual"} for y in hist_years if y in full_hist["Year"].values]
+    # Historical part
+    hist_list = [{"Company": company, "Year": int(y), "Metric": metric,
+                  "Value": full_hist.set_index("Year")[metric][y], "Type": "Actual"}
+                 for y in hist_years]
 
-    fut_list = [{"Company": company, "Year": int(y), "Metric": metric, "Value": float(pred), "Type": "Forecast"} for y, pred in zip(future_years, y_pred)]
+    # Forecast part
+    fut_list = [{"Company": company, "Year": int(y), "Metric": metric,
+                 "Value": float(pred), "Type": "Forecast"}
+                for y, pred in zip(future_years, y_pred)]
 
     combo = pd.DataFrame(hist_list + fut_list)
 
-    chart = alt.Chart(combo).mark_line(point=True).encode(
-        x="Year:O", y="Value:Q", color="Type:N",
-        tooltip=["Company", "Metric", "Year", alt.Tooltip("Value:Q", title="Value (mn)")]
-    ).properties(title=f"{company} — {metric} (mn): Actual vs Forecast")
+    chart = (
+        alt.Chart(combo)
+        .mark_line(point=True)
+        .encode(
+            x="Year:O", y="Value:Q", color="Type:N",
+            tooltip=["Company", "Metric", "Year", alt.Tooltip("Value:Q", title="Value (mn)")]
+        )
+        .properties(title=f"{company} — {metric} (mn): Actual vs Forecast")
+    )
     return combo, chart
+
 
 # ----------------- Chatbot -----------------
 def parse_query(query: str):
@@ -258,3 +273,4 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
+
