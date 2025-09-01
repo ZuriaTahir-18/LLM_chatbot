@@ -4,6 +4,8 @@ import json
 import pandas as pd
 import numpy as np
 import altair as alt
+from spellchecker import SpellChecker
+
 
 # --- Optional: free LLM via Hugging Face (flan-t5-small) ---
 # This adds light natural-language understanding: synonyms, spelling fixes, JSON parsing.
@@ -67,7 +69,7 @@ SYNONYMS = {
 
 # ----------------- Helper: basic (regex/keyword) parsing -----------------
 
-from spellchecker import SpellChecker
+
 
 spell = SpellChecker()
 
@@ -333,4 +335,5 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
+
 
