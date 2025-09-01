@@ -105,7 +105,7 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
 def respond(query: str):
     comps, yrs, mets, forecast, horizon = extract_companies_basic(query), extract_years_basic(query), extract_metrics_basic(query), ("forecast" in query.lower()), 2
     if not comps or not mets:
-        return None, None, "⚠️ Please specify at least one company and one metric."
+        return "⚠️ Please specify at least one company and one metric.", None, None
 
     results, charts = [], []
     if forecast:
@@ -123,26 +123,11 @@ def respond(query: str):
                     charts.append(chart)
         if results:
             return pd.concat(results, ignore_index=True), alt.vconcat(*charts), None
-        else:
-            return None, None, "⚠️ No forecast generated."
-    else:
-        return None, None, "⚠️ Add 'forecast' to your query for predictions."
+    return "⚠️ No forecast generated.", None, None
 
 # ----------------- UI -----------------
 st.set_page_config(page_title="Financial Chatbot", page_icon="💬", layout="wide")
 st.title("💬 Financial Data Chatbot — Forecasting")
-
-st.markdown(
-    """
-    Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for **Microsoft, Tesla, and Apple** (2022–2024).
-    
-    ✅ Supports multi-company queries (e.g. *"Compare Tesla and Apple revenue"*)  
-    ✅ Forecast future years (e.g. *"Forecast Tesla sales for 2025"*)  
-    ✅ Multi-metric forecasting (e.g. *"Forecast liabilities and assets of Apple in next 2 years"*)  
-
-    **Note:** All values are shown in **millions**.  
-    """
-)
 
 query = st.chat_input("Ask your question…")
 if query:
