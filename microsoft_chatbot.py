@@ -129,6 +129,18 @@ def respond(query: str):
 st.set_page_config(page_title="Financial Chatbot", page_icon="💬", layout="wide")
 st.title("💬 Financial Data Chatbot — Forecasting")
 
+st.markdown(
+    """
+    Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for **Microsoft, Tesla, and Apple** (2022–2024).
+    
+    ✅ Supports multi-company queries (e.g. *"Compare Tesla and Apple revenue"*)  
+    ✅ Forecast future years (e.g. *"Forecast Tesla sales for 2025"*)  
+    ✅ Multi-metric forecasting (e.g. *"Forecast liabilities and assets of Apple in next 2 years"*)  
+
+    **Note:** All values are shown in **millions**. Spelling will be auto-corrected where possible.
+    """
+)
+
 query = st.chat_input("Ask your question…")
 if query:
     df, chart, note = respond(query)
