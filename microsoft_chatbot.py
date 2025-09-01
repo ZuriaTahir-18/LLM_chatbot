@@ -218,32 +218,65 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     return combo, chart
 
 # ----------------- Chatbot core -----------------
+# ----------------- Chatbot core (REPLACE parse_query with this) -----------------
 def parse_query(query: str):
-    query = correct_spelling(query)
-    parsed = parse_with_llm(query)
-    if parsed:
-        comps = parsed["companies"] or extract_companies_basic(query)
-        yrs = parsed["years"] or extract_years_basic(query)
-        mets = parsed["metrics"] or extract_metrics_basic(query)
-        forecast = parsed["forecast"] or ("forecast" in query.lower() or "predict" in query.lower())
-        horizon = parsed["horizon"]
-    else:
-        comps = extract_companies_basic(query)
-        yrs = extract_years_basic(query)
-        mets = extract_metrics_basic(query)
-        forecast = ("forecast" in query.lower() or "predict" in query.lower() or "next" in query.lower())
-        horizon = extract_horizon(query) or 2
+    # 1) Basic normalization + spelling
+    clean = correct_spelling(query)
+    clean_low = clean.lower()
 
-    # 🔹 Auto-detect future years (beyond dataset)
+    # 2) Extract obvious things from text first
+    yrs_text = extract_years_basic(clean_low)         # explicit 4-digit years in query
+    horizon_text = extract_horizon(clean_low)        # "next N years" if present
+    comps_text = extract_companies_basic(clean)      # companies by substring
+    mets_text = extract_metrics_basic(clean)         # metrics by substring/synonyms
+
+    # 3) Try LLM parsing as a fallback/refinement (do not blindly trust its horizon)
+    parsed = parse_with_llm(clean)  # may be None
+    if parsed:
+        # companies & metrics: prefer LLM if it gave them, else keep text-extracted ones
+        comps = parsed.get("companies") or comps_text
+        mets = parsed.get("metrics") or mets_text
+
+        # years: prefer LLM years if it returned any, else use text years
+        parsed_years = parsed.get("years") or []
+        yrs = parsed_years if parsed_years else yrs_text
+
+        # forecast detection: combine LLM signal with keyword detection
+        forecast = bool(parsed.get("forecast", False)) or ("forecast" in clean_low or "predict" in clean_low)
+        # horizon: only accept parsed horizon if LLM actually returned it (i.e., non-null)
+        horizon = parsed.get("horizon", None)
+    else:
+        comps = comps_text
+        mets = mets_text
+        yrs = yrs_text
+        forecast = ("forecast" in clean_low or "predict" in clean_low or "next" in clean_low)
+        horizon = None
+
+    # 4) If horizon not set from LLM, prefer explicit "next N years" found in text
+    if horizon is None and horizon_text:
+        horizon = horizon_text
+
+    # 5) If explicit future years were requested (e.g., 2030), convert to horizon
     if yrs:
         max_year = max(r["Year"] for r in financial_data)
         future_years = [y for y in yrs if y > max_year]
         if future_years:
             forecast = True
+            # horizon is distance from max available year (e.g., 2030 -> 6 if max_year=2024)
             horizon = max(y - max_year for y in future_years)
+            # remove those future years from yrs, since we treat them as forecast horizon
             yrs = [y for y in yrs if y <= max_year]
 
+    # 6) Final fallback: if forecast requested but horizon still None -> default 2
+    if forecast and (horizon is None or horizon == 0):
+        horizon = 2
+
+    # 7) If forecast not requested, keep horizon 0 (no forecasting)
+    if not forecast:
+        horizon = 0
+
     return comps, yrs, mets, forecast, horizon
+
 
 def respond(query: str):
     comps, yrs, mets, do_forecast, horizon = parse_query(query)
@@ -361,4 +394,5 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
+
 
