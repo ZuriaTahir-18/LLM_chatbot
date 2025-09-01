@@ -6,3 +6,4 @@ transformers
 torch
 sentencepiece
 scikit-learn
+pyspellchecker
