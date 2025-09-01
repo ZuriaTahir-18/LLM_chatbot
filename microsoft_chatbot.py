@@ -1,3 +1,4 @@
+
 import streamlit as st
 import re
 import json
@@ -144,7 +145,7 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     model = LinearRegression().fit(X, y)
     last_year = int(full_hist["Year"].max())
 
-    # Always include 2022–2024 historical years
+    # 🔹 Always include historical years 2022–2024 in chart
     hist_years = sorted(full_hist["Year"].tolist())
 
     # Requested future years
@@ -153,15 +154,17 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     else:
         future_years = list(range(last_year + 1, last_year + 1 + horizon))
 
-    # Limit max forecast year to 2040
-    future_years = [y for y in future_years if y <= 2040]
+    # Limit max forecast year
+    future_years = [y for y in future_years if y <= 2034]
 
     y_pred = model.predict(np.array(future_years).reshape(-1, 1)) if future_years else []
 
+    # Historical part
     hist_list = [{"Company": company, "Year": int(y), "Metric": metric,
                   "Value": full_hist.set_index("Year")[metric][y], "Type": "Actual"}
                  for y in hist_years]
 
+    # Forecast part
     fut_list = [{"Company": company, "Year": int(y), "Metric": metric,
                  "Value": float(pred), "Type": "Forecast"}
                 for y, pred in zip(future_years, y_pred)]
@@ -179,6 +182,7 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     )
     return combo, chart
 
+
 # ----------------- Chatbot -----------------
 def parse_query(query: str):
     clean = correct_spelling(query)
@@ -192,18 +196,15 @@ def parse_query(query: str):
     forecast_flag = "forecast" in clean_low or "predict" in clean_low or "next" in clean_low
     horizon = horizon_text or 2 if forecast_flag else 0
 
-    # ✅ Year validation
-    if yrs_text:
-        if max(yrs_text) > 2040:
-            return [], [], [], False, 0, "⚠️ Sorry, I can only forecast up to 2040."
-        if min(yrs_text) < 2022:
-            return [], [], [], False, 0, "⚠️ Sorry, I only have data from 2022 onwards."
+    dataset_max = max(r["Year"] for r in financial_data)
+    if yrs_text and max(yrs_text) > dataset_max:
+        if max(yrs_text) > 2034:
+            return [], [], [], False, 0, f"⚠️ I can only forecast up to 2034."
+        forecast_flag = True
 
-    # ✅ Unsupported companies
-    for word in query.split():
-        if word.lower() not in VALID_COMPANIES_LOWER and word.title() not in VALID_COMPANIES:
-            if word.lower() in ["amazon", "google", "meta", "ibm"]:  # simple check
-                return [], [], [], False, 0, f"⚠️ Sorry, I only have data for Microsoft, Tesla, and Apple."
+    for c in comps_text:
+        if c not in VALID_COMPANIES:
+            return [], [], [], False, 0, f"⚠️ Sorry, I only have data for Microsoft, Tesla, and Apple."
 
     return comps_text, yrs_text, mets_text, forecast_flag, horizon, None
 
@@ -248,7 +249,7 @@ st.markdown(
 
     🔥 Features:  
     - **Compare companies instantly** → *"Compare Tesla and Apple revenue"*  
-    - **Forecast up to 2040** → *"Predict Apple assets in 2030"*  
+    - **Forecast up to 2034** → *"Predict Apple assets in 2030"*  
     - **Custom ranges** → *"Apple net income from 2023 to 2026"*  
     - **Multi-metrics** → *"Tesla revenue and liabilities next 3 years"*  
     - **Spelling correction** → *"aape revnue 2024"* ✅  
@@ -263,8 +264,7 @@ for q, r in st.session_state.history:
     st.markdown(f"**🧑 You:** {q}")
     if isinstance(r, tuple):
         df, chart, note = r
-        if isinstance(df, pd.DataFrame): 
-            st.dataframe(df.reset_index(drop=True), use_container_width=True)  # ✅ remove default 0 index
+        if isinstance(df, pd.DataFrame): st.dataframe(df, use_container_width=True)
         if chart is not None: st.altair_chart(chart, use_container_width=True)
         if note: st.info(note)
     else: st.warning(r)
@@ -274,3 +274,4 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
+
