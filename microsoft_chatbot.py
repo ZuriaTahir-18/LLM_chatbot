@@ -62,7 +62,6 @@ financial_data = [
 ]
 
 VALID_COMPANIES = {"Microsoft", "Tesla", "Apple"}
-VALID_COMPANIES_LOWER = {c.lower() for c in VALID_COMPANIES}
 VALID_METRICS = ["Total Revenue", "Net Income", "Total Assets", "Total Liabilities", "Cash Flow"]
 
 SYNONYMS = {
@@ -123,14 +122,13 @@ def get_company_year_df(companies, years, metrics):
     return df.sort_values(["Company", "Year"]).reset_index(drop=True)
 
 def add_serial_column(df: pd.DataFrame, reorder_for_forecast: bool = False) -> pd.DataFrame:
-    df2 = df.reset_index(drop=True).copy()  # remove existing index
-    df2.insert(0, "S.No", range(1, len(df2) + 1))  # start S.No from 1
+    df2 = df.reset_index(drop=True).copy()
+    df2.insert(0, "S.No", range(1, len(df2) + 1))  # start from 1
     if reorder_for_forecast:
         desired = ["S.No", "Year", "Metric", "Value", "Company", "Type"]
         existing = [c for c in desired if c in df2.columns]
         df2 = df2[existing]
     return df2
-
 
 # ----------------- Forecasting -----------------
 from sklearn.linear_model import LinearRegression
@@ -144,25 +142,19 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     model = LinearRegression().fit(X, y)
     last_year = int(full_hist["Year"].max())
 
-    # Historical years
     hist_years = sorted(full_hist["Year"].tolist())
-
-    # Requested future years
     if years_requested:
         future_years = sorted([y for y in years_requested if y > last_year])
     else:
         future_years = list(range(last_year + 1, last_year + 1 + horizon))
-
     future_years = [y for y in future_years if y <= 2034]
 
     y_pred = model.predict(np.array(future_years).reshape(-1, 1)) if future_years else []
 
-    # Historical part
     hist_list = [{"Company": company, "Year": int(y), "Metric": metric,
                   "Value": full_hist.set_index("Year")[metric][y], "Type": "Actual"}
                  for y in hist_years]
 
-    # Forecast part
     fut_list = [{"Company": company, "Year": int(y), "Metric": metric,
                  "Value": float(pred), "Type": "Forecast"}
                 for y, pred in zip(future_years, y_pred)]
@@ -191,7 +183,6 @@ def parse_query(query: str):
     comps_text = extract_companies_basic(clean)
     mets_text = extract_metrics_basic(clean)
 
-    # Trigger forecast if user explicitly asks or if requested years go beyond available data
     max_data_year = 2024
     forecast_flag = "forecast" in clean_low or "predict" in clean_low or "next" in clean_low
     if yrs_text and max(yrs_text) > max_data_year:
@@ -200,17 +191,14 @@ def parse_query(query: str):
 
     horizon = horizon_text or 2 if forecast_flag else 0
 
-    # Year validation
     if yrs_text:
         if max(yrs_text) > 2040:
             return [], [], [], False, 0, "⚠️ Sorry, I can only forecast up to 2040."
         if min(yrs_text) < 2022:
             return [], [], [], False, 0, "⚠️ Sorry, I only have data from 2022 onwards."
 
-    comps_text = extract_companies_basic(clean)
     if not comps_text:
         return [], [], [], False, 0, "⚠️ Sorry, I only have data for Microsoft, Tesla, and Apple."
-
 
     return comps_text, yrs_text, mets_text, forecast_flag, horizon, None
 
@@ -272,16 +260,15 @@ for q, r in st.session_state.history:
     st.markdown(f"**🧑 You:** {q}")
     if isinstance(r, tuple):
         df, chart, note = r
-        if isinstance(df, pd.DataFrame): st.dataframe(df, use_container_width=True)
+        if isinstance(df, pd.DataFrame):
+            st.dataframe(df.style.hide(axis="index"), use_container_width=True)  # ✅ hide default index
         if chart is not None: st.altair_chart(chart, use_container_width=True)
         if note: st.info(note)
-    else: st.warning(r)
+    else:
+        st.warning(r)
 
 query = st.chat_input("💡 Ask your question here…")
 if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
-
-
-
