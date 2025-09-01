@@ -66,6 +66,17 @@ SYNONYMS = {
 }
 
 # ----------------- Helper: basic (regex/keyword) parsing -----------------
+
+from spellchecker import SpellChecker
+
+spell = SpellChecker()
+
+def correct_spelling(text):
+    corrected = []
+    for word in text.split():
+        corrected.append(spell.correction(word) or word)
+    return " ".join(corrected)
+
 def extract_companies_basic(query: str):
     found = []
     low = query.lower()
@@ -322,3 +333,4 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
+
