@@ -27,7 +27,7 @@ def correct_spelling(text: str) -> str:
     for word in text.split():
         correction = spell.correction(word)
         corrected.append(correction if correction else word)
-    return " " .join(corrected)
+    return " ".join(corrected)
 
 @st.cache_resource(show_spinner=False)
 def get_llm():
@@ -88,14 +88,12 @@ def extract_companies_basic(query: str):
             found.append(c)
     return list(dict.fromkeys(found))
 
-
 def extract_years_basic(query: str):
     years = re.findall(r"\b(20\d{2})\b", query)
     if len(years) == 2:
         a, b = int(years[0]), int(years[1])
         return list(range(min(a, b), max(a, b) + 1))
     return [int(y) for y in years]
-
 
 def extract_metrics_basic(query: str):
     low = query.lower()
@@ -152,7 +150,6 @@ def to_millions(value):
         return v / 1e6
     except Exception:
         return None
-
 
 def get_company_year_df(companies, years, metrics):
     rows = [r for r in financial_data if r["Company"] in companies and (not years or r["Year"] in years)]
@@ -244,6 +241,26 @@ def respond(query: str):
     if not comps:
         return "⚠️ Please mention at least one company (Microsoft, Tesla, or Apple).", None, None
 
+    # 🔹 Multi-company & multi-metric with forecast
+    if do_forecast:
+        charts = []
+        results = []
+        for comp in comps:
+            df = get_company_year_df([comp], yrs, mets)
+            if df.empty:
+                continue
+            for metric in mets:
+                combo, fchart = forecast_linear(df, comp, metric, horizon)
+                if fchart is not None:
+                    charts.append(fchart)
+                    results.append(combo)
+        if charts:
+            final_chart = alt.vconcat(*charts)
+            return pd.concat(results, ignore_index=True), final_chart, None
+        else:
+            return "No forecast could be generated.", None, None
+
+    # Multi-company comparison without forecast
     if len(comps) >= 2:
         df = get_company_year_df(comps, yrs, mets)
         if df.empty:
@@ -263,6 +280,7 @@ def respond(query: str):
         )
         return df, chart, None
 
+    # Single company without forecast
     comp = comps[0]
     df = get_company_year_df([comp], yrs, mets)
     if df.empty:
@@ -281,12 +299,6 @@ def respond(query: str):
         .properties(title=f"{comp}: {', '.join(mets)} (mn)")
     )
 
-    if do_forecast and len(mets) == 1:
-        metric = mets[0]
-        combo, fchart = forecast_linear(df, comp, metric, horizon)
-        if fchart is not None:
-            return df, base_chart | fchart, None
-
     return df, base_chart, None
 
 # ----------------- Streamlit UI -----------------
@@ -298,7 +310,7 @@ st.markdown(
     Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for **Microsoft, Tesla, Apple** (2022–2024). 
     Try natural questions like *"Apple 2023 profit"*, *"Compare Tesla vs Microsoft sales"*, or *"Forecast Apple revenue next 2 years"*.
     
-    **Note:** All values shown in **millions**. Spelling mistakes will be auto-corrected when possible. Future years beyond dataset are treated as forecasts.
+    **Note:** All values shown in **millions**. Spelling mistakes will be auto-corrected when possible. Future years beyond dataset are treated as forecasts. Multiple companies and metrics can be forecasted together.
     """
 )
 
