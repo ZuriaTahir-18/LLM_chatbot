@@ -261,7 +261,9 @@ for q, r in st.session_state.history:
     if isinstance(r, tuple):
         df, chart, note = r
         if isinstance(df, pd.DataFrame):
-            st.dataframe(df.style.hide(axis="index"), use_container_width=True)  # ✅ hide default index
+            # Display only columns, keep S.No, hide Pandas index completely
+            st.dataframe(df.loc[:, :], use_container_width=True)
+
         if chart is not None: st.altair_chart(chart, use_container_width=True)
         if note: st.info(note)
     else:
@@ -272,3 +274,4 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
+
