@@ -89,7 +89,7 @@ def extract_companies_basic(query: str):
     return list(dict.fromkeys(found))
 
 def extract_years_basic(query: str):
-    years = re.findall(r"\b(20\d{2})\b", query)
+    years = re.findall(r"\\b(20\\d{2})\\b", query)
     if len(years) == 2:
         a, b = int(years[0]), int(years[1])
         return list(range(min(a, b), max(a, b) + 1))
@@ -97,7 +97,7 @@ def extract_years_basic(query: str):
 
 # 🔹 detect expressions like "next 3 years"
 def extract_horizon(query: str):
-    m = re.search(r"next (\d+) year", query.lower())
+    m = re.search(r"next (\\d+) year", query.lower())
     if m:
         return int(m.group(1))
     return None
@@ -179,30 +179,30 @@ except Exception:
 def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 2):
     if not _HAS_SKLEARN or df.empty:
         return None, None
-    sub = df[df["Company"] == company][["Year", metric]].dropna().copy()
+    sub = df[df["Company"] == company][["Year", metric]].dropna()
     if len(sub) < 2:
         return None, None
-
-    # ensure company column present
-    sub["Company"] = company
-
     X = sub[["Year"]].values
     y = sub[metric].values
     model = LinearRegression().fit(X, y)
-
     last_year = int(sub["Year"].max())
     future_years = np.arange(last_year + 1, last_year + 1 + horizon)
     y_pred = model.predict(future_years.reshape(-1, 1))
 
-    hist = sub.rename(columns={metric: "Value"}).assign(Type="Actual", Metric=metric)
+    hist = sub.rename(columns={metric: "Value"}).assign(Type="Actual", Metric=metric, Company=company)
     fut = pd.DataFrame({
         "Company": company,
         "Year": future_years,
+        "Metric": metric,
         "Value": y_pred,
         "Type": "Forecast",
-        "Metric": metric,
     })
     combo = pd.concat([hist, fut], ignore_index=True)
+
+    # ✅ Reorder columns: Serial, Year, Metric, Value, Company, Type
+    combo.reset_index(inplace=True)
+    combo.rename(columns={"index": "S.No"}, inplace=True)
+    combo = combo[["S.No", "Year", "Metric", "Value", "Company", "Type"]]
 
     chart = (
         alt.Chart(combo)
@@ -221,7 +221,6 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
 def parse_query(query: str):
     query = correct_spelling(query)
     parsed = parse_with_llm(query)
-
     if parsed:
         comps = parsed["companies"] or extract_companies_basic(query)
         yrs = parsed["years"] or extract_years_basic(query)
