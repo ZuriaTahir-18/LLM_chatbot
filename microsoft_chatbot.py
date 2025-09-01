@@ -4,30 +4,43 @@ import json
 import pandas as pd
 import numpy as np
 import altair as alt
-from spellchecker import SpellChecker
-
 
 # --- Optional: free LLM via Hugging Face (flan-t5-small) ---
-# This adds light natural-language understanding: synonyms, spelling fixes, JSON parsing.
 try:
     from transformers import pipeline
     _HAS_TRANSFORMERS = True
 except Exception:
     _HAS_TRANSFORMERS = False
 
+# --- Spell checker ---
+try:
+    from spellchecker import SpellChecker
+    spell = SpellChecker()
+    _HAS_SPELL = True
+except Exception:
+    _HAS_SPELL = False
+
+def correct_spelling(text: str) -> str:
+    if not _HAS_SPELL:
+        return text
+    corrected = []
+    for word in text.split():
+        correction = spell.correction(word)
+        corrected.append(correction if correction else word)
+    return " " .join(corrected)
+
 @st.cache_resource(show_spinner=False)
 def get_llm():
     if not _HAS_TRANSFORMERS:
         return None
     try:
-        # Small + free model; downloads on first run (HF Spaces is fine)
         return pipeline("text2text-generation", model="google/flan-t5-small")
     except Exception:
         return None
 
 LLM = get_llm()
 
-# ----------------- Financial Data (same as your original) -----------------
+# ----------------- Financial Data -----------------
 financial_data = [
     {"Company": "Microsoft", "Year": 2022, "Total Revenue": 1.98E11, "Net Income": 72738000000, "Total Assets": 3.65E11,
      "Total Liabilities": 1.98E11, "Cash Flow": 89035000000},
@@ -59,7 +72,6 @@ VALID_METRICS = [
 ]
 
 SYNONYMS = {
-    # metric → set of synonyms (lowercase)
     "Total Revenue": {"revenue", "sales", "turnover", "income from sales"},
     "Net Income": {"net income", "profit", "earnings", "net profit"},
     "Total Assets": {"assets", "total assets", "asset"},
@@ -67,25 +79,14 @@ SYNONYMS = {
     "Cash Flow": {"cash flow", "cashflow", "operating cash flow", "cash"},
 }
 
-# ----------------- Helper: basic (regex/keyword) parsing -----------------
-
-
-
-spell = SpellChecker()
-
-def correct_spelling(text):
-    corrected = []
-    for word in text.split():
-        corrected.append(spell.correction(word) or word)
-    return " ".join(corrected)
-
+# ----------------- Basic parsing -----------------
 def extract_companies_basic(query: str):
     found = []
     low = query.lower()
     for c in VALID_COMPANIES:
         if c.lower() in low:
             found.append(c)
-    return list(dict.fromkeys(found))  # unique, keep order
+    return list(dict.fromkeys(found))
 
 
 def extract_years_basic(query: str):
@@ -102,18 +103,13 @@ def extract_metrics_basic(query: str):
     for metric, keys in SYNONYMS.items():
         if any(k in low for k in keys):
             chosen.append(metric)
-    # If explicitly asking for "metrics" words like revenue/assets/net income etc.
     for m in VALID_METRICS:
         if m.lower() in low and m not in chosen:
             chosen.append(m)
     return list(dict.fromkeys(chosen))
 
-
-# ----------------- Helper: LLM-powered parsing -----------------
+# ----------------- LLM-powered parsing -----------------
 def parse_with_llm(query: str):
-    """Try to normalize user query into {companies, years, metrics, forecast} using a tiny free LLM.
-    Returns dict or None if parsing fails.
-    """
     if LLM is None:
         return None
     instruction = (
@@ -127,13 +123,11 @@ def parse_with_llm(query: str):
     prompt = f"{instruction}\nQuestion: {query}\nJSON:"
     try:
         out = LLM(prompt, max_new_tokens=128)[0]["generated_text"].strip()
-        # Allow cases where model adds text before/after JSON — try to locate JSON
         start = out.find("{")
         end = out.rfind("}")
         if start != -1 and end != -1 and end > start:
             out = out[start:end + 1]
         data = json.loads(out)
-        # Keep only valid values
         companies = [c for c in data.get("companies", []) if c in VALID_COMPANIES]
         years = [int(y) for y in data.get("years", []) if str(y).isdigit()]
         metrics = [m for m in data.get("metrics", []) if m in VALID_METRICS]
@@ -144,11 +138,10 @@ def parse_with_llm(query: str):
             "years": years,
             "metrics": metrics,
             "forecast": forecast,
-            "horizon": max(1, min(horizon, 5)),  # cap to 5 years
+            "horizon": max(1, min(horizon, 5)),
         }
     except Exception:
         return None
-
 
 # ----------------- Data utilities -----------------
 def to_millions(value):
@@ -162,28 +155,22 @@ def to_millions(value):
 
 
 def get_company_year_df(companies, years, metrics):
-    # filter by companies/years
     rows = [r for r in financial_data if r["Company"] in companies and (not years or r["Year"] in years)]
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
-    # Keep only needed columns
     keep = ["Company", "Year"] + metrics
     df = df[keep]
-    # Convert values to millions
     for m in metrics:
         df[m] = df[m].map(to_millions)
     return df.sort_values(["Company", "Year"]).reset_index(drop=True)
 
-
-# ----------------- Forecasting (simple linear regression) -----------------
-# Note: with only 3 points per company, keep it simple & transparent
+# ----------------- Forecasting -----------------
 try:
     from sklearn.linear_model import LinearRegression
     _HAS_SKLEARN = True
 except Exception:
     _HAS_SKLEARN = False
-
 
 def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 2):
     if not _HAS_SKLEARN or df.empty:
@@ -221,11 +208,9 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     )
     return combo, chart
 
-
 # ----------------- Chatbot core -----------------
-
 def parse_query(query: str):
-    """Combine LLM + basic rules for robust parsing."""
+    query = correct_spelling(query)
     parsed = parse_with_llm(query)
     if parsed:
         comps = parsed["companies"] or extract_companies_basic(query)
@@ -241,7 +226,6 @@ def parse_query(query: str):
         horizon = 2
     return comps, yrs, mets, forecast, horizon
 
-
 def respond(query: str):
     comps, yrs, mets, do_forecast, horizon = parse_query(query)
 
@@ -250,13 +234,11 @@ def respond(query: str):
     if not comps:
         return "⚠️ Please mention at least one company (Microsoft, Tesla, or Apple).", None, None
 
-    # Multi-company comparison
     if len(comps) >= 2:
         df = get_company_year_df(comps, yrs, mets)
         if df.empty:
             return "No data found for your filters.", None, None
 
-        # Melt to long format for multi-metric facet
         melt = df.melt(id_vars=["Company", "Year"], value_vars=mets, var_name="Metric", value_name="Value")
         chart = (
             alt.Chart(melt)
@@ -271,7 +253,6 @@ def respond(query: str):
         )
         return df, chart, None
 
-    # Single company (can show multiple metrics + optional forecast)
     comp = comps[0]
     df = get_company_year_df([comp], yrs, mets)
     if df.empty:
@@ -290,15 +271,13 @@ def respond(query: str):
         .properties(title=f"{comp}: {', '.join(mets)} (mn)")
     )
 
-    # Forecast: if a single metric is requested, add forecast line
     if do_forecast and len(mets) == 1:
         metric = mets[0]
         combo, fchart = forecast_linear(df, comp, metric, horizon)
         if fchart is not None:
-            return df, base_chart | fchart, None  # side-by-side charts
+            return df, base_chart | fchart, None
 
     return df, base_chart, None
-
 
 # ----------------- Streamlit UI -----------------
 st.set_page_config(page_title="Financial Chatbot — LLM + Forecast", page_icon="💬", layout="wide")
@@ -309,11 +288,10 @@ st.markdown(
     Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for **Microsoft, Tesla, Apple** (2022–2024). 
     Try natural questions like *"Apple 2023 profit"*, *"Compare Tesla vs Microsoft sales"*, or *"Forecast Apple revenue next 2 years"*.
     
-    **Note:** All values shown in **millions**. If spelling is off, the LLM will try to normalize it.
+    **Note:** All values shown in **millions**. Spelling mistakes will be auto-corrected when possible.
     """
 )
 
-# Chat history
 if "history" not in st.session_state:
     st.session_state.history = []
 
@@ -335,5 +313,3 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
-
-
