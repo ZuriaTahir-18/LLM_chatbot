@@ -143,10 +143,12 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     last_year = int(full_hist["Year"].max())
 
     hist_years = sorted(full_hist["Year"].tolist())
+
     if years_requested:
         future_years = sorted([y for y in years_requested if y > last_year])
     else:
         future_years = list(range(last_year + 1, last_year + 1 + horizon))
+
     future_years = [y for y in future_years if y <= 2034]
 
     y_pred = model.predict(np.array(future_years).reshape(-1, 1)) if future_years else []
@@ -184,22 +186,25 @@ def parse_query(query: str):
     mets_text = extract_metrics_basic(clean)
 
     max_data_year = 2024
+    MAX_FORECAST_YEAR = 2034
+
+    # Handle years beyond available forecast
+    if yrs_text:
+        if max(yrs_text) > MAX_FORECAST_YEAR:
+            return [], [], [], False, 0, f"⚠️ Sorry, I can only forecast up to {MAX_FORECAST_YEAR}."
+        if min(yrs_text) < 2022:
+            return [], [], [], False, 0, "⚠️ Sorry, I only have data from 2022 onwards."
+
     forecast_flag = "forecast" in clean_low or "predict" in clean_low or "next" in clean_low
     if yrs_text and max(yrs_text) > max_data_year:
         forecast_flag = True
         horizon_text = max(yrs_text) - max_data_year
 
-    horizon = horizon_text or 2 if forecast_flag else 0
-
-    if yrs_text:
-        if max(yrs_text) > 2040:
-            return [], [], [], False, 0, "⚠️ Sorry, I can only forecast up to 2040."
-        if min(yrs_text) < 2022:
-            return [], [], [], False, 0, "⚠️ Sorry, I only have data from 2022 onwards."
-
+    comps_text = extract_companies_basic(clean)
     if not comps_text:
         return [], [], [], False, 0, "⚠️ Sorry, I only have data for Microsoft, Tesla, and Apple."
 
+    horizon = horizon_text or 2 if forecast_flag else 0
     return comps_text, yrs_text, mets_text, forecast_flag, horizon, None
 
 def respond(query: str):
@@ -260,18 +265,13 @@ for q, r in st.session_state.history:
     st.markdown(f"**🧑 You:** {q}")
     if isinstance(r, tuple):
         df, chart, note = r
-        if isinstance(df, pd.DataFrame):
-            # Display only columns, keep S.No, hide Pandas index completely
-            st.dataframe(df.loc[:, :], use_container_width=True)
-
+        if isinstance(df, pd.DataFrame): st.dataframe(df, use_container_width=True)
         if chart is not None: st.altair_chart(chart, use_container_width=True)
         if note: st.info(note)
-    else:
-        st.warning(r)
+    else: st.warning(r)
 
 query = st.chat_input("💡 Ask your question here…")
 if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
-
