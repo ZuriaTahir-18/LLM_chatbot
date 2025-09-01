@@ -206,8 +206,10 @@ def parse_query(query: str):
         if min(yrs_text) < 2022:
             return [], [], [], False, 0, "⚠️ Sorry, I only have data from 2022 onwards."
 
+    comps_text = extract_companies_basic(clean)
     if not comps_text:
         return [], [], [], False, 0, "⚠️ Sorry, I only have data for Microsoft, Tesla, and Apple."
+
 
     return comps_text, yrs_text, mets_text, forecast_flag, horizon, None
 
@@ -279,4 +281,5 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
+
 
