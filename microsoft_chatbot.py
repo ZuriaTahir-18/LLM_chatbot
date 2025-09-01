@@ -143,7 +143,7 @@ def parse_with_llm(query: str):
             "years": years,
             "metrics": metrics,
             "forecast": forecast,
-            "horizon": max(1, min(horizon, 5)),
+            "horizon": max(1, min(horizon, 10)),
         }
     except Exception:
         return None
@@ -189,7 +189,7 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     future_years = np.arange(last_year + 1, last_year + 1 + horizon)
     y_pred = model.predict(future_years.reshape(-1, 1))
 
-    hist = sub.rename(columns={metric: "Value"}).assign(Type="Actual", Metric=metric, Company=company)
+    hist = sub.rename(columns={metric: "Value"}).assign(Type="Actual", Metric=metric)
     fut = pd.DataFrame({
         "Company": company,
         "Year": future_years,
@@ -198,11 +198,6 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
         "Type": "Forecast",
     })
     combo = pd.concat([hist, fut], ignore_index=True)
-
-    # ✅ Reorder columns: Serial, Year, Metric, Value, Company, Type
-    combo.reset_index(inplace=True)
-    combo.rename(columns={"index": "S.No"}, inplace=True)
-    combo = combo[["S.No", "Year", "Metric", "Value", "Company", "Type"]]
 
     chart = (
         alt.Chart(combo)
@@ -218,65 +213,32 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     return combo, chart
 
 # ----------------- Chatbot core -----------------
-# ----------------- Chatbot core (REPLACE parse_query with this) -----------------
 def parse_query(query: str):
-    # 1) Basic normalization + spelling
-    clean = correct_spelling(query)
-    clean_low = clean.lower()
-
-    # 2) Extract obvious things from text first
-    yrs_text = extract_years_basic(clean_low)         # explicit 4-digit years in query
-    horizon_text = extract_horizon(clean_low)        # "next N years" if present
-    comps_text = extract_companies_basic(clean)      # companies by substring
-    mets_text = extract_metrics_basic(clean)         # metrics by substring/synonyms
-
-    # 3) Try LLM parsing as a fallback/refinement (do not blindly trust its horizon)
-    parsed = parse_with_llm(clean)  # may be None
+    query = correct_spelling(query)
+    parsed = parse_with_llm(query)
     if parsed:
-        # companies & metrics: prefer LLM if it gave them, else keep text-extracted ones
-        comps = parsed.get("companies") or comps_text
-        mets = parsed.get("metrics") or mets_text
-
-        # years: prefer LLM years if it returned any, else use text years
-        parsed_years = parsed.get("years") or []
-        yrs = parsed_years if parsed_years else yrs_text
-
-        # forecast detection: combine LLM signal with keyword detection
-        forecast = bool(parsed.get("forecast", False)) or ("forecast" in clean_low or "predict" in clean_low)
-        # horizon: only accept parsed horizon if LLM actually returned it (i.e., non-null)
-        horizon = parsed.get("horizon", None)
+        comps = parsed["companies"] or extract_companies_basic(query)
+        yrs = parsed["years"] or extract_years_basic(query)
+        mets = parsed["metrics"] or extract_metrics_basic(query)
+        forecast = parsed["forecast"] or ("forecast" in query.lower() or "predict" in query.lower() or "next" in query.lower())
+        horizon = parsed["horizon"]
     else:
-        comps = comps_text
-        mets = mets_text
-        yrs = yrs_text
-        forecast = ("forecast" in clean_low or "predict" in clean_low or "next" in clean_low)
-        horizon = None
+        comps = extract_companies_basic(query)
+        yrs = extract_years_basic(query)
+        mets = extract_metrics_basic(query)
+        forecast = ("forecast" in query.lower() or "predict" in query.lower() or "next" in query.lower())
+        horizon = extract_horizon(query) or 2
 
-    # 4) If horizon not set from LLM, prefer explicit "next N years" found in text
-    if horizon is None and horizon_text:
-        horizon = horizon_text
-
-    # 5) If explicit future years were requested (e.g., 2030), convert to horizon
+    # 🔹 Auto-detect future years (beyond dataset)
     if yrs:
         max_year = max(r["Year"] for r in financial_data)
         future_years = [y for y in yrs if y > max_year]
         if future_years:
             forecast = True
-            # horizon is distance from max available year (e.g., 2030 -> 6 if max_year=2024)
-            horizon = max(y - max_year for y in future_years)
-            # remove those future years from yrs, since we treat them as forecast horizon
+            horizon = min(max(y - max_year for y in future_years), 10)
             yrs = [y for y in yrs if y <= max_year]
 
-    # 6) Final fallback: if forecast requested but horizon still None -> default 2
-    if forecast and (horizon is None or horizon == 0):
-        horizon = 2
-
-    # 7) If forecast not requested, keep horizon 0 (no forecasting)
-    if not forecast:
-        horizon = 0
-
     return comps, yrs, mets, forecast, horizon
-
 
 def respond(query: str):
     comps, yrs, mets, do_forecast, horizon = parse_query(query)
@@ -352,26 +314,17 @@ st.title("💬 Financial Data Chatbot — LLM + Forecasting")
 
 st.markdown(
     """
-    🚀 **Welcome to the AI-Powered Financial Chatbot!** 💬  
-
-    Curious about the financial future of **Microsoft, Tesla, or Apple**?  
-    This chatbot helps you **explore, compare, and forecast** key financial metrics with ease.  
-
-    🔍 **What you can do here:**  
-    - Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** 📊  
-    - Get **forecasts for the next 1–5 years** using smart predictive models 📈  
-    - Compare **multiple companies side by side** for quick insights 🤝  
-    - Enjoy **auto spell-correction** so typos won’t stop you ✨  
-
-    💡 **Try asking:**  
-    - *"Compare Microsoft and Tesla profit in 2023"*  
-    - *"Forecast Apple revenue for the next 4 years"*  
-    - *"Show Tesla assets and liabilities between 2022–2024"*  
-
-    👉 All results are shown in **millions**, with clean tables & interactive charts.  
+    🔮 **Your Personal Finance Data Analyst**  
+    Ask anything about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for **Microsoft, Tesla, and Apple** (2022–2024).  
+    
+    ✅ Compare companies instantly (*"Compare Tesla and Apple profit"*)  
+    ✅ Forecast up to **10 years ahead** (*"Predict Microsoft revenue in 2030"*)  
+    ✅ Handle multiple metrics together (*"Apple revenue and liabilities next 3 years"*)  
+    ✅ Spelling auto-corrected — just type naturally!  
+    
+    ⚡ Data shown in **millions**. Future years beyond dataset are forecasted using **AI regression models**.  
     """
 )
-
 
 if "history" not in st.session_state:
     st.session_state.history = []
@@ -394,5 +347,3 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
-
-
