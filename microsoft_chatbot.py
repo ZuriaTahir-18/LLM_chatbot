@@ -20,6 +20,7 @@ try:
 except Exception:
     _HAS_SPELL = False
 
+
 def correct_spelling(text: str) -> str:
     if not _HAS_SPELL:
         return text
@@ -29,6 +30,7 @@ def correct_spelling(text: str) -> str:
         corrected.append(correction if correction else word)
     return " ".join(corrected)
 
+
 @st.cache_resource(show_spinner=False)
 def get_llm():
     if not _HAS_TRANSFORMERS:
@@ -37,6 +39,7 @@ def get_llm():
         return pipeline("text2text-generation", model="google/flan-t5-small")
     except Exception:
         return None
+
 
 LLM = get_llm()
 
@@ -80,12 +83,15 @@ SYNONYMS = {
     "Cash Flow": {"cash flow", "cashflow", "operating cash flow", "cash"},
 }
 
-# helper to make a set of metric-related keywords
-METRIC_KEYWORDS = set()
-for m, syns in SYNONYMS.items():
-    METRIC_KEYWORDS.update(w.lower() for w in m.split())
+# build metric phrase list for regex checks
+_metric_phrases = set()
+for k, syns in SYNONYMS.items():
+    _metric_phrases.add(k.lower())
     for s in syns:
-        METRIC_KEYWORDS.update(t.lower() for t in s.split())
+        _metric_phrases.add(s.lower())
+# flatten to common short phrases (e.g., 'assets', 'revenue', 'net income')
+metric_phrase_list = sorted(_metric_phrases, key=lambda x: -len(x))
+metric_regex = r"(?:" + r"|".join(re.escape(p) for p in metric_phrase_list) + r")"
 
 # ----------------- Basic parsing -----------------
 def extract_companies_basic(query: str):
@@ -96,27 +102,47 @@ def extract_companies_basic(query: str):
             found.append(c)
     return list(dict.fromkeys(found))
 
+
 def extract_years_basic(query: str):
     years = re.findall(r"\b(20\d{2})\b", query)
     return [int(y) for y in years]
 
+
 # 🔹 detect expressions like "next 3 years"
 def extract_horizon(query: str):
-    m = re.search(r"next (\d+) year", query.lower())
+    m = re.search(r"next\s+(\d+)\s+year", query.lower())
     if m:
         return int(m.group(1))
     return None
+
+
+# 🔹 detect ranges like "from 2023 to 2026" or "between 2023 and 2026" or "2023-2026"
+def extract_year_range(query: str):
+    query = query.lower()
+    patterns = [
+        r"from\s+(20\d{2})\s+(?:to|through|-)\s+(20\d{2})",
+        r"between\s+(20\d{2})\s+and\s+(20\d{2})",
+        r"\b(20\d{2})\s*[-–]\s*(20\d{2})\b",
+    ]
+    for p in patterns:
+        m = re.search(p, query)
+        if m:
+            a, b = int(m.group(1)), int(m.group(2))
+            if a > b:
+                a, b = b, a
+            return list(range(a, b + 1))
+    return None
+
 
 def extract_metrics_basic(query: str):
     low = query.lower()
     chosen = []
     for metric, keys in SYNONYMS.items():
-        if any(k in low for k in keys):
+        if any(k in low for k in keys) or metric.lower() in low:
             chosen.append(metric)
-    for m in VALID_METRICS:
-        if m.lower() in low and m not in chosen:
-            chosen.append(m)
+    # ensure order stable
     return list(dict.fromkeys(chosen))
+
 
 # ----------------- LLM-powered parsing -----------------
 def parse_with_llm(query: str):
@@ -153,6 +179,7 @@ def parse_with_llm(query: str):
     except Exception:
         return None
 
+
 # ----------------- Data utilities -----------------
 def to_millions(value):
     if value is None:
@@ -175,45 +202,57 @@ def get_company_year_df(companies, years, metrics):
         df[m] = df[m].map(to_millions)
     return df.sort_values(["Company", "Year"]).reset_index(drop=True)
 
-# helper to format dataframe for display (index starts at 1)
-def format_df_for_display(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.reset_index(drop=True).copy()
-    df.index = df.index + 1
-    return df
 
-# helper to detect unsupported company mentions
+# helper: add 'S.No' starting at 1 and optionally reorder for forecast view
+def add_serial_column(df: pd.DataFrame, reorder_for_forecast: bool = False) -> pd.DataFrame:
+    df2 = df.reset_index(drop=True).copy()
+    df2.insert(0, "S.No", range(1, len(df2) + 1))
+    if reorder_for_forecast:
+        # desired order for forecast outputs
+        desired = ["S.No", "Year", "Metric", "Value", "Company", "Type"]
+        existing = [c for c in desired if c in df2.columns]
+        df2 = df2[existing]
+    return df2
+
+
+# improved unsupported-company detector
 COMMON_IGNORE = {
     'next','year','years','predict','forecast','in','for','and','or','show','compare','between','vs','versus',
     'please','me','my','the','a','an','of','to','on','with','by','is','are','i','you','how','what','which','give',
     'show','display','get','list','all','company','companies'
 }
 
+
 def detect_unsupported_companies(query: str, comps_found: list):
     """Return error message string if user mentioned a company not in VALID_COMPANIES, else None."""
     low = query.lower()
+    # 1) quick regex: company followed by metric phrase: 'amazon assets', 'amazon revenue'
+    m = re.search(r"\b([a-z][a-z0-9&\.\-]{1,})\s+" + metric_regex, low)
+    if m:
+        candidate = m.group(1).lower()
+        if candidate not in VALID_COMPANIES_LOWER:
+            return f"⚠️ Sorry — I only have data for Microsoft, Tesla, and Apple. I detected: {candidate.title()}."
+    # 2) token-based heuristics when regex doesn't match
     tokens = re.findall(r"\b[a-z]{2,}\b", low)
     candidates = []
     for i, t in enumerate(tokens):
         if t in COMMON_IGNORE:
             continue
-        if t in METRIC_KEYWORDS:
-            continue
-        if t.isdigit():
-            continue
         if t in VALID_COMPANIES_LOWER:
             continue
-        # consider it a company candidate only if it sits next to a metric word (e.g. 'amazon assets')
+        if t in metric_phrase_list:
+            continue
+        # if token sits next to metric word, treat as candidate
         left = tokens[i-1] if i-1 >= 0 else ''
         right = tokens[i+1] if i+1 < len(tokens) else ''
-        if left in METRIC_KEYWORDS or right in METRIC_KEYWORDS:
+        if left in metric_phrase_list or right in metric_phrase_list:
             candidates.append(t)
-    # also consider direct "company metric in YEAR" patterns where company may be first token
-    # e.g., 'amazon assets in 2023' already caught; keep candidates unique
     candidates = [c for c in dict.fromkeys(candidates) if c not in VALID_COMPANIES_LOWER]
     if candidates:
         names = ', '.join(c.title() for c in candidates)
         return f"⚠️ Sorry — I only have data for Microsoft, Tesla, and Apple. I detected: {names}."
     return None
+
 
 # ----------------- Forecasting -----------------
 try:
@@ -222,36 +261,71 @@ try:
 except Exception:
     _HAS_SKLEARN = False
 
-def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 2):
+
+def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 2, years_requested: list = None):
+    """
+    df: a DataFrame that contains at least the historical rows for the company and metric
+    company: company name
+    metric: metric column name (already in millions)
+    horizon: fallback horizon if years_requested not provided
+    years_requested: optional list of years the user explicitly asked for (may include future years)
+    Returns: combo_df (Company, Year, Metric, Value, Type), chart
+    """
     if not _HAS_SKLEARN or df.empty:
         return None, None
-    sub = df[df["Company"] == company][["Year", metric]].dropna()
-    if len(sub) < 2:
+
+    # Use ALL available historical data to train the model (don't filter by years_requested)
+    full_hist = df[df["Company"] == company][["Year", metric]].dropna().copy()
+    if len(full_hist) < 2:
         return None, None
 
-    X = sub[["Year"]].values
-    y = sub[metric].values
+    X = full_hist[["Year"]].values
+    y = full_hist[metric].values
     model = LinearRegression().fit(X, y)
-    last_year = int(sub["Year"].max())
-    future_years = np.arange(last_year + 1, last_year + 1 + horizon)
-    y_pred = model.predict(future_years.reshape(-1, 1))
 
-    # 🔹 FIX: include Company & Metric in historical part
-    hist = pd.DataFrame({
-        "Company": company,
-        "Year": sub["Year"].values,
-        "Metric": metric,
-        "Value": sub[metric].values,
-        "Type": "Actual",
-    })
-    fut = pd.DataFrame({
-        "Company": company,
-        "Year": future_years,
-        "Metric": metric,
-        "Value": y_pred,
-        "Type": "Forecast",
-    })
-    combo = pd.concat([hist, fut], ignore_index=True)
+    last_year = int(full_hist["Year"].max())
+
+    # determine which future years we need to predict
+    if years_requested:
+        future_years = sorted([y for y in years_requested if y > last_year])
+    else:
+        future_years = list(range(last_year + 1, last_year + 1 + horizon))
+
+    # cap predictions to 10 years ahead of dataset max (safety)
+    dataset_max = max(r["Year"] for r in financial_data)
+    future_years = [y for y in future_years if y <= dataset_max + 10]
+
+    y_pred = model.predict(np.array(future_years).reshape(-1, 1)) if future_years else np.array([])
+
+    # Historical rows to display: if years_requested provided, show only requested years within historical range
+    if years_requested:
+        hist_years = sorted([y for y in years_requested if y <= last_year])
+    else:
+        hist_years = sorted(full_hist["Year"].tolist())
+
+    full_hist_map = full_hist.set_index("Year")[metric].to_dict()
+    hist_list = []
+    for y in hist_years:
+        if y in full_hist_map:
+            hist_list.append({
+                "Company": company,
+                "Year": int(y),
+                "Metric": metric,
+                "Value": full_hist_map[y],
+                "Type": "Actual",
+            })
+
+    fut_list = []
+    for y, pred in zip(future_years, y_pred):
+        fut_list.append({
+            "Company": company,
+            "Year": int(y),
+            "Metric": metric,
+            "Value": float(pred),
+            "Type": "Forecast",
+        })
+
+    combo = pd.DataFrame(hist_list + fut_list)
 
     chart = (
         alt.Chart(combo)
@@ -266,14 +340,16 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     )
     return combo, chart
 
+
 # ----------------- Chatbot core -----------------
 def parse_query(query: str):
     # normalize + spelling
     clean = correct_spelling(query)
     clean_low = clean.lower()
 
-    # text-based extraction
-    yrs_text = extract_years_basic(clean_low)
+    # text-based extraction (range detection first)
+    yrs_range = extract_year_range(clean_low)
+    yrs_text = extract_years_basic(clean_low) if yrs_range is None else yrs_range
     horizon_text = extract_horizon(clean_low)
     comps_text = extract_companies_basic(clean)
     mets_text = extract_metrics_basic(clean)
@@ -294,28 +370,27 @@ def parse_query(query: str):
         forecast_flag = ("forecast" in clean_low or "predict" in clean_low or "next" in clean_low)
         horizon = None
 
-    # prefer explicit 'next N years' in text if LLM didn't give horizon
+    # prefer explicit 'next N years' in text if no LLM horizon
     if horizon is None and horizon_text:
         horizon = horizon_text
 
-    # Detect unsupported companies mentioned explicitly (e.g., 'amazon assets')
+    # Detect unsupported companies mentioned explicitly
     unsupported_msg = detect_unsupported_companies(clean, comps)
     if unsupported_msg:
         return [], [], [], False, 0, unsupported_msg
 
     # Auto-detect future years (beyond dataset) and convert to horizon
-    max_year = max(r["Year"] for r in financial_data)
+    dataset_max = max(r["Year"] for r in financial_data)
     if yrs:
-        future_years = [y for y in yrs if y > max_year]
+        future_years = [y for y in yrs if y > dataset_max]
         if future_years:
-            # limit to 10 years ahead
-            gap = max(future_years) - max_year
+            gap = max(future_years) - dataset_max
             if gap > 10:
-                return [], [], [], False, 0, f"⚠️ I can only forecast up to 10 years ahead (till {max_year + 10})."
+                return [], [], [], False, 0, f"⚠️ I can only forecast up to 10 years ahead (till {dataset_max + 10})."
             forecast_flag = True
+            # For range queries we want the exact future years user asked for — compute horizon accordingly
             horizon = min(gap, 10)
-            # remove future years from yrs (we treat them as forecast horizon)
-            yrs = [y for y in yrs if y <= max_year]
+            # keep yrs as-is (we will use yrs to decide which historical years to display and which future years to forecast)
 
     # If forecast requested but still no horizon, default to 2
     if forecast_flag and (horizon is None or horizon == 0):
@@ -344,18 +419,21 @@ def respond(query: str):
         charts = []
         results = []
         for comp in comps:
-            df = get_company_year_df([comp], yrs, mets)
-            if df.empty:
-                continue
+            # For training use all available historical data for this company & metric
             for metric in mets:
-                combo, fchart = forecast_linear(df, comp, metric, horizon)
-                if fchart is not None:
+                df_all = get_company_year_df([comp], None, [metric])
+                if df_all.empty:
+                    continue
+                # pass years_requested so forecast_linear shows only requested historical years (if any)
+                combo, fchart = forecast_linear(df_all, comp, metric, horizon, years_requested=yrs)
+                if fchart is not None and combo is not None and not combo.empty:
                     charts.append(fchart)
                     results.append(combo)
         if charts:
             final_chart = alt.vconcat(*charts)
             final_df = pd.concat(results, ignore_index=True)
-            final_df = format_df_for_display(final_df)
+            # add serial column and reorder for forecast view
+            final_df = add_serial_column(final_df, reorder_for_forecast=True)
             return final_df, final_chart, None
         else:
             return "No forecast could be generated.", None, None
@@ -366,8 +444,9 @@ def respond(query: str):
         if df.empty:
             return "No data found for your filters.", None, None
 
-        df = format_df_for_display(df)
-        melt = df.melt(id_vars=[df.columns[0], df.columns[1]], value_vars=mets, var_name="Metric", value_name="Value")
+        # add serial column (keep columns intact)
+        df_out = add_serial_column(df, reorder_for_forecast=False)
+        melt = df.melt(id_vars=["Company", "Year"], value_vars=mets, var_name="Metric", value_name="Value")
         chart = (
             alt.Chart(melt)
             .mark_bar()
@@ -379,7 +458,7 @@ def respond(query: str):
                 tooltip=["Company", "Metric", "Year", alt.Tooltip("Value:Q", title="Value (mn)")],
             )
         )
-        return df, chart, None
+        return df_out, chart, None
 
     # Single company without forecast
     comp = comps[0]
@@ -387,8 +466,8 @@ def respond(query: str):
     if df.empty:
         return "No data found for your filters.", None, None
 
-    df = format_df_for_display(df)
-    melt = df.melt(id_vars=[df.columns[0], df.columns[1]], value_vars=mets, var_name="Metric", value_name="Value")
+    df_out = add_serial_column(df, reorder_for_forecast=False)
+    melt = df.melt(id_vars=["Company", "Year"], value_vars=mets, var_name="Metric", value_name="Value")
     base_chart = (
         alt.Chart(melt)
         .mark_bar()
@@ -396,12 +475,13 @@ def respond(query: str):
             x="Year:O",
             y="Value:Q",
             color="Metric:N",
-            tooltip=["Year", "Metric", alt.Tooltip("Value:Q", title="Value (mn)" )],
+            tooltip=["Year", "Metric", alt.Tooltip("Value:Q", title="Value (mn)")],
         )
         .properties(title=f"{comp}: {', '.join(mets)} (mn)")
     )
 
-    return df, base_chart, None
+    return df_out, base_chart, None
+
 
 # ----------------- Streamlit UI -----------------
 st.set_page_config(page_title="Financial Chatbot — LLM + Forecast", page_icon="💬", layout="wide")
