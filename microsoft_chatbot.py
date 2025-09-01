@@ -89,15 +89,12 @@ def extract_companies_basic(query: str):
     return list(dict.fromkeys(found))
 
 def extract_years_basic(query: str):
-    years = re.findall(r"\\b(20\\d{2})\\b", query)
-    if len(years) == 2:
-        a, b = int(years[0]), int(years[1])
-        return list(range(min(a, b), max(a, b) + 1))
+    years = re.findall(r"\b(20\d{2})\b", query)
     return [int(y) for y in years]
 
 # 🔹 detect expressions like "next 3 years"
 def extract_horizon(query: str):
-    m = re.search(r"next (\\d+) year", query.lower())
+    m = re.search(r"next (\d+) year", query.lower())
     if m:
         return int(m.group(1))
     return None
@@ -230,12 +227,13 @@ def parse_query(query: str):
         horizon = extract_horizon(query) or 2
 
     # 🔹 Auto-detect future years (beyond dataset)
+    max_year = max(r["Year"] for r in financial_data)
     if yrs:
-        max_year = max(r["Year"] for r in financial_data)
         future_years = [y for y in yrs if y > max_year]
         if future_years:
             forecast = True
-            horizon = min(max(y - max_year for y in future_years), 10)
+            # horizon = gap between dataset max year and furthest future year
+            horizon = min(max(future_years) - max_year, 10)
             yrs = [y for y in yrs if y <= max_year]
 
     return comps, yrs, mets, forecast, horizon
@@ -263,9 +261,11 @@ def respond(query: str):
                     results.append(combo)
         if charts:
             final_chart = alt.vconcat(*charts)
-            combined = pd.concat(results, ignore_index=True)
-            combined.index = combined.index + 1  # start from 1 instead of 0
-            return combined, final_chart, None
+            final_df = pd.concat(results, ignore_index=True)
+            # Reset index and start serial no at 1
+            final_df.reset_index(drop=True, inplace=True)
+            final_df.index += 1
+            return final_df, final_chart, None
         else:
             return "No forecast could be generated.", None, None
 
@@ -275,7 +275,6 @@ def respond(query: str):
         if df.empty:
             return "No data found for your filters.", None, None
 
-        df.index = df.index + 1  # start from 1 instead of 0
         melt = df.melt(id_vars=["Company", "Year"], value_vars=mets, var_name="Metric", value_name="Value")
         chart = (
             alt.Chart(melt)
@@ -288,6 +287,8 @@ def respond(query: str):
                 tooltip=["Company", "Metric", "Year", alt.Tooltip("Value:Q", title="Value (mn)")],
             )
         )
+        df.reset_index(drop=True, inplace=True)
+        df.index += 1
         return df, chart, None
 
     # Single company without forecast
@@ -296,7 +297,6 @@ def respond(query: str):
     if df.empty:
         return "No data found for your filters.", None, None
 
-    df.index = df.index + 1  # start from 1 instead of 0
     melt = df.melt(id_vars=["Company", "Year"], value_vars=mets, var_name="Metric", value_name="Value")
     base_chart = (
         alt.Chart(melt)
@@ -310,6 +310,8 @@ def respond(query: str):
         .properties(title=f"{comp}: {', '.join(mets)} (mn)")
     )
 
+    df.reset_index(drop=True, inplace=True)
+    df.index += 1
     return df, base_chart, None
 
 # ----------------- Streamlit UI -----------------
@@ -322,7 +324,7 @@ st.markdown(
     Ask anything about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for **Microsoft, Tesla, and Apple** (2022–2024).  
     
     ✅ Compare companies instantly (*"Compare Tesla and Apple profit"*)  
-    ✅ Forecast up to **10 years ahead** (*"Predict Microsoft revenue in 2030"*)  
+    ✅ Forecast up to **10 years ahead** (*"Tesla assets in 2030"*)  
     ✅ Handle multiple metrics together (*"Apple revenue and liabilities next 3 years"*)  
     ✅ Spelling auto-corrected — just type naturally!  
     
