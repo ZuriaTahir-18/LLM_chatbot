@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import altair as alt
 import difflib
+from spellchecker import SpellChecker
 
 # --- Optional: free LLM via Hugging Face (flan-t5-small) ---
 try:
@@ -357,3 +358,4 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
+
