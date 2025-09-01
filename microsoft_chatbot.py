@@ -105,7 +105,7 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
 def respond(query: str):
     comps, yrs, mets, forecast, horizon = extract_companies_basic(query), extract_years_basic(query), extract_metrics_basic(query), ("forecast" in query.lower()), 2
     if not comps or not mets:
-        return "⚠️ Please specify at least one company and one metric.", None, None
+        return None, None, "⚠️ Please specify at least one company and one metric."
 
     results, charts = [], []
     if forecast:
@@ -123,7 +123,10 @@ def respond(query: str):
                     charts.append(chart)
         if results:
             return pd.concat(results, ignore_index=True), alt.vconcat(*charts), None
-    return "⚠️ No forecast generated.", None, None
+        else:
+            return None, None, "⚠️ No forecast generated."
+    else:
+        return None, None, "⚠️ Add 'forecast' to your query for predictions."
 
 # ----------------- UI -----------------
 st.set_page_config(page_title="Financial Chatbot", page_icon="💬", layout="wide")
@@ -137,7 +140,7 @@ st.markdown(
     ✅ Forecast future years (e.g. *"Forecast Tesla sales for 2025"*)  
     ✅ Multi-metric forecasting (e.g. *"Forecast liabilities and assets of Apple in next 2 years"*)  
 
-    **Note:** All values are shown in **millions**. Spelling will be auto-corrected where possible.
+    **Note:** All values are shown in **millions**.  
     """
 )
 
