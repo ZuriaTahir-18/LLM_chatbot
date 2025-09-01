@@ -253,7 +253,7 @@ st.markdown(
     - **Forecast up to 2034** → *"Predict Apple assets in 2030"*  
     - **Custom ranges** → *"Apple net income from 2023 to 2026"*  
     - **Multi-metrics** → *"Tesla revenue and liabilities next 3 years"*  
-    - **Spelling correction** → *"aape revnue 2024"* ✅  
+      
 
     ⚡ All values are in **millions**. Future years are predicted using **AI regression**.
     """
@@ -275,3 +275,4 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
+
