@@ -90,6 +90,9 @@ def extract_companies_basic(query: str):
 
 def extract_years_basic(query: str):
     years = re.findall(r"\b(20\d{2})\b", query)
+    if len(years) == 2:
+        a, b = int(years[0]), int(years[1])
+        return list(range(min(a, b), max(a, b) + 1))
     return [int(y) for y in years]
 
 # 🔹 detect expressions like "next 3 years"
@@ -179,6 +182,7 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     sub = df[df["Company"] == company][["Year", metric]].dropna()
     if len(sub) < 2:
         return None, None
+
     X = sub[["Year"]].values
     y = sub[metric].values
     model = LinearRegression().fit(X, y)
@@ -186,7 +190,14 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     future_years = np.arange(last_year + 1, last_year + 1 + horizon)
     y_pred = model.predict(future_years.reshape(-1, 1))
 
-    hist = sub.rename(columns={metric: "Value"}).assign(Type="Actual", Metric=metric)
+    # 🔹 FIX: include Company & Metric in historical part
+    hist = pd.DataFrame({
+        "Company": company,
+        "Year": sub["Year"],
+        "Metric": metric,
+        "Value": sub[metric],
+        "Type": "Actual",
+    })
     fut = pd.DataFrame({
         "Company": company,
         "Year": future_years,
@@ -213,6 +224,7 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
 def parse_query(query: str):
     query = correct_spelling(query)
     parsed = parse_with_llm(query)
+
     if parsed:
         comps = parsed["companies"] or extract_companies_basic(query)
         yrs = parsed["years"] or extract_years_basic(query)
@@ -226,20 +238,28 @@ def parse_query(query: str):
         forecast = ("forecast" in query.lower() or "predict" in query.lower() or "next" in query.lower())
         horizon = extract_horizon(query) or 2
 
+    # 🔹 Company validation
+    if any(c for c in comps if c not in VALID_COMPANIES):
+        return [], [], [], False, 0, "⚠️ Sorry, I only have data for Microsoft, Tesla, and Apple."
+
     # 🔹 Auto-detect future years (beyond dataset)
     max_year = max(r["Year"] for r in financial_data)
     if yrs:
         future_years = [y for y in yrs if y > max_year]
         if future_years:
+            if max(future_years) - max_year > 10:
+                return [], [], [], False, 0, f"⚠️ I can only forecast up to 10 years ahead (till {max_year + 10})."
             forecast = True
-            # horizon = gap between dataset max year and furthest future year
             horizon = min(max(future_years) - max_year, 10)
             yrs = [y for y in yrs if y <= max_year]
 
-    return comps, yrs, mets, forecast, horizon
+    return comps, yrs, mets, forecast, horizon, None
 
 def respond(query: str):
-    comps, yrs, mets, do_forecast, horizon = parse_query(query)
+    comps, yrs, mets, do_forecast, horizon, error_msg = parse_query(query)
+
+    if error_msg:
+        return error_msg, None, None
 
     if not mets:
         return "⚠️ I can provide: revenue, net income, assets, liabilities, or cash flow.", None, None
@@ -261,11 +281,7 @@ def respond(query: str):
                     results.append(combo)
         if charts:
             final_chart = alt.vconcat(*charts)
-            final_df = pd.concat(results, ignore_index=True)
-            # Reset index and start serial no at 1
-            final_df.reset_index(drop=True, inplace=True)
-            final_df.index += 1
-            return final_df, final_chart, None
+            return pd.concat(results, ignore_index=True), final_chart, None
         else:
             return "No forecast could be generated.", None, None
 
@@ -287,8 +303,6 @@ def respond(query: str):
                 tooltip=["Company", "Metric", "Year", alt.Tooltip("Value:Q", title="Value (mn)")],
             )
         )
-        df.reset_index(drop=True, inplace=True)
-        df.index += 1
         return df, chart, None
 
     # Single company without forecast
@@ -310,8 +324,6 @@ def respond(query: str):
         .properties(title=f"{comp}: {', '.join(mets)} (mn)")
     )
 
-    df.reset_index(drop=True, inplace=True)
-    df.index += 1
     return df, base_chart, None
 
 # ----------------- Streamlit UI -----------------
@@ -324,7 +336,7 @@ st.markdown(
     Ask anything about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for **Microsoft, Tesla, and Apple** (2022–2024).  
     
     ✅ Compare companies instantly (*"Compare Tesla and Apple profit"*)  
-    ✅ Forecast up to **10 years ahead** (*"Tesla assets in 2030"*)  
+    ✅ Forecast up to **10 years ahead** (*"Predict Microsoft revenue in 2030"*)  
     ✅ Handle multiple metrics together (*"Apple revenue and liabilities next 3 years"*)  
     ✅ Spelling auto-corrected — just type naturally!  
     
