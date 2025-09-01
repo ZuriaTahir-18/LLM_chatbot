@@ -319,12 +319,26 @@ st.title("💬 Financial Data Chatbot — LLM + Forecasting")
 
 st.markdown(
     """
-    Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for **Microsoft, Tesla, Apple** (2022–2024). 
-    Try natural questions like *"Apple 2023 profit"*, *"Compare Tesla vs Microsoft sales"*, or *"Forecast Apple revenue next 2 years"*.
-    
-    **Note:** All values shown in **millions**. Spelling mistakes will be auto-corrected when possible. Future years beyond dataset are treated as forecasts. Multiple companies and metrics can be forecasted together.
+    🚀 **Welcome to the AI-Powered Financial Chatbot!** 💬  
+
+    Curious about the financial future of **Microsoft, Tesla, or Apple**?  
+    This chatbot helps you **explore, compare, and forecast** key financial metrics with ease.  
+
+    🔍 **What you can do here:**  
+    - Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** 📊  
+    - Get **forecasts for the next 1–5 years** using smart predictive models 📈  
+    - Compare **multiple companies side by side** for quick insights 🤝  
+    - Enjoy **auto spell-correction** so typos won’t stop you ✨  
+
+    💡 **Try asking:**  
+    - *"Compare Microsoft and Tesla profit in 2023"*  
+    - *"Forecast Apple revenue for the next 4 years"*  
+    - *"Show Tesla assets and liabilities between 2022–2024"*  
+
+    👉 All results are shown in **millions**, with clean tables & interactive charts.  
     """
 )
+
 
 if "history" not in st.session_state:
     st.session_state.history = []
@@ -347,3 +361,4 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
+
