@@ -1,7 +1,5 @@
-
 import streamlit as st
 import re
-import json
 import pandas as pd
 import numpy as np
 import altair as alt
@@ -145,7 +143,7 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     model = LinearRegression().fit(X, y)
     last_year = int(full_hist["Year"].max())
 
-    # 🔹 Always include historical years 2022–2024 in chart
+    # Historical years
     hist_years = sorted(full_hist["Year"].tolist())
 
     # Requested future years
@@ -154,7 +152,6 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     else:
         future_years = list(range(last_year + 1, last_year + 1 + horizon))
 
-    # Limit max forecast year
     future_years = [y for y in future_years if y <= 2034]
 
     y_pred = model.predict(np.array(future_years).reshape(-1, 1)) if future_years else []
@@ -182,16 +179,13 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     )
     return combo, chart
 
-
 # ----------------- Chatbot -----------------
 def parse_query(query: str):
     clean = correct_spelling(query)
     clean_low = clean.lower()
 
-    # ✅ support ranges like "from 2023 to 2026"
     yrs_range = extract_year_range(clean_low)
     yrs_text = yrs_range if yrs_range else extract_years_basic(clean_low)
-
     horizon_text = extract_horizon(clean_low)
     comps_text = extract_companies_basic(clean)
     mets_text = extract_metrics_basic(clean)
@@ -199,35 +193,18 @@ def parse_query(query: str):
     forecast_flag = "forecast" in clean_low or "predict" in clean_low or "next" in clean_low
     horizon = horizon_text or 2 if forecast_flag else 0
 
-    # ✅ Year validation
+    # Year validation
     if yrs_text:
         if max(yrs_text) > 2040:
             return [], [], [], False, 0, "⚠️ Sorry, I can only forecast up to 2040."
         if min(yrs_text) < 2022:
             return [], [], [], False, 0, "⚠️ Sorry, I only have data from 2022 onwards."
 
-    # ✅ Unsupported companies
-    for word in query.split():
-        if word.lower() not in VALID_COMPANIES_LOWER and word.title() not in VALID_COMPANIES:
-            return [], [], [], False, 0, "⚠️ Sorry, I only have data for Microsoft, Tesla, and Apple."
+    if not comps_text:
+        return [], [], [], False, 0, "⚠️ Sorry, I only have data for Microsoft, Tesla, and Apple."
 
     return comps_text, yrs_text, mets_text, forecast_flag, horizon, None
 
-
-# ----------------- UI -----------------
-for q, r in st.session_state.history:
-    st.markdown(f"**🧑 You:** {q}")
-    if isinstance(r, tuple):
-        df, chart, note = r
-        if isinstance(df, pd.DataFrame):
-            # ✅ Hide default index, only show "S.No"
-            st.dataframe(df.style.hide(axis="index"), use_container_width=True)
-        if chart is not None: 
-            st.altair_chart(chart, use_container_width=True)
-        if note: 
-            st.info(note)
-    else:
-        st.warning(r)
 def respond(query: str):
     comps, yrs, mets, do_forecast, horizon, error_msg = parse_query(query)
     if error_msg: return error_msg, None, None
@@ -241,7 +218,8 @@ def respond(query: str):
                 df_all = get_company_year_df([comp], None, [metric])
                 combo, fchart = forecast_linear(df_all, comp, metric, horizon, years_requested=yrs)
                 if combo is not None and not combo.empty:
-                    charts.append(fchart); results.append(combo)
+                    charts.append(fchart)
+                    results.append(combo)
         if results:
             final_df = add_serial_column(pd.concat(results, ignore_index=True), reorder_for_forecast=True)
             return final_df, alt.vconcat(*charts), None
@@ -250,6 +228,7 @@ def respond(query: str):
     df = get_company_year_df(comps, yrs, mets)
     if df.empty: return "No data found.", None, None
     df_out = add_serial_column(df, reorder_for_forecast=False)
+
     melt = df.melt(id_vars=["Company", "Year"], value_vars=mets, var_name="Metric", value_name="Value")
     chart = alt.Chart(melt).mark_bar().encode(
         x="Year:O", y="Value:Q", color="Company:N" if len(comps) > 1 else "Metric:N",
@@ -294,5 +273,3 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
-
-
