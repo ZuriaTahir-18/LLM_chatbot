@@ -4,6 +4,7 @@ import json
 import pandas as pd
 import numpy as np
 import altair as alt
+import difflib
 
 # --- Optional: free LLM via Hugging Face (flan-t5-small) ---
 try:
@@ -79,15 +80,25 @@ SYNONYMS = {
     "Cash Flow": {"cash flow", "cashflow", "operating cash flow", "cash"},
 }
 
-# ----------------- Basic parsing -----------------
-def extract_companies_basic(query: str):
-    found = []
-    low = query.lower()
-    for c in VALID_COMPANIES:
-        if c.lower() in low:
-            found.append(c)
-    return list(dict.fromkeys(found))
+# ----------------- Custom corrections -----------------
+CUSTOM_CORRECTIONS = {
+    "aape": "Apple",
+    "applein": "Apple",
+    "appl": "Apple",
+    "teelsa": "Tesla",
+    "microsft": "Microsoft",
+    "net in come": "Net Income",
+    "netincome": "Net Income",
+}
 
+def apply_custom_corrections(text: str):
+    low = text.lower()
+    for wrong, right in CUSTOM_CORRECTIONS.items():
+        if wrong in low:
+            low = low.replace(wrong, right.lower())
+    return low
+
+# ----------------- Parsing helpers -----------------
 def extract_years_basic(query: str):
     years = re.findall(r"\b(20\d{2})\b", query)
     if len(years) == 2:
@@ -95,59 +106,67 @@ def extract_years_basic(query: str):
         return list(range(min(a, b), max(a, b) + 1))
     return [int(y) for y in years]
 
-def extract_metrics_basic(query: str):
-    low = query.lower()
-    chosen = []
-    for metric, keys in SYNONYMS.items():
-        if any(k in low for k in keys):
-            chosen.append(metric)
-    for m in VALID_METRICS:
-        if m.lower() in low and m not in chosen:
-            chosen.append(m)
-    return list(dict.fromkeys(chosen))
+# ----------------- Enhanced parse_query -----------------
+def parse_query(query: str):
+    normalized = re.sub(r"(?<=\d)(?=\D)", " ", query)
+    normalized = re.sub(r"(?<=\D)(?=\d)", " ", normalized)
+    normalized = re.sub(r"[\s\t\r\n]+", " ", normalized).strip()
+    corrected_text = correct_spelling(normalized)
+    low_text = apply_custom_corrections(corrected_text).lower()
 
-# ----------------- LLM-powered parsing -----------------
-def parse_with_llm(query: str):
-    if LLM is None:
-        return None
-    instruction = (
-        "You extract structured info from a finance question. "
-        "Recognize company names among [Microsoft, Apple, Tesla]; "
-        "map synonyms to metrics among [Total Revenue, Net Income, Total Assets, Total Liabilities, Cash Flow]; "
-        "identify 4-digit years; detect if forecasting is requested (words like forecast/predict/next). "
-        "Return STRICT JSON with keys: companies (list), years (list), metrics (list), forecast (bool), horizon (int). "
-        "If horizon not given, use 2."
-    )
-    prompt = f"{instruction}\nQuestion: {query}\nJSON:"
-    try:
-        out = LLM(prompt, max_new_tokens=128)[0]["generated_text"].strip()
-        start = out.find("{")
-        end = out.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            out = out[start:end + 1]
-        data = json.loads(out)
-        companies = [c for c in data.get("companies", []) if c in VALID_COMPANIES]
-        years = [int(y) for y in data.get("years", []) if str(y).isdigit()]
-        metrics = [m for m in data.get("metrics", []) if m in VALID_METRICS]
-        forecast = bool(data.get("forecast", False))
-        horizon = int(data.get("horizon", 2))
-        return {
-            "companies": companies,
-            "years": years,
-            "metrics": metrics,
-            "forecast": forecast,
-            "horizon": max(1, min(horizon, 5)),
-        }
-    except Exception:
-        return None
+    # Extract years
+    yrs = extract_years_basic(low_text)
+
+    # Companies
+    companies = []
+    for comp in VALID_COMPANIES:
+        if comp.lower() in low_text:
+            companies.append(comp)
+    if not companies:
+        tokens = re.findall(r"[a-z]+", low_text)
+        for tok in tokens:
+            matches = difflib.get_close_matches(tok, [c.lower() for c in VALID_COMPANIES], n=1, cutoff=0.7)
+            if matches:
+                companies.append(next(c for c in VALID_COMPANIES if c.lower() == matches[0]))
+    companies = list(dict.fromkeys(companies))
+
+    # Metrics
+    metrics = []
+    metric_candidates = {}
+    for m, syns in SYNONYMS.items():
+        metric_candidates[m.lower()] = m
+        for s in syns:
+            metric_candidates[s.lower()] = m
+    for key, canon in metric_candidates.items():
+        if key in low_text and canon not in metrics:
+            metrics.append(canon)
+    if not metrics:
+        tokens = re.findall(r"[a-z]+", low_text)
+        for tok in tokens:
+            match = difflib.get_close_matches(tok, list(metric_candidates.keys()), n=1, cutoff=0.7)
+            if match:
+                canon = metric_candidates[match[0]]
+                if canon not in metrics:
+                    metrics.append(canon)
+
+    # Forecast detection
+    forecast = ("forecast" in low_text) or ("predict" in low_text)
+    horizon = 2
+    max_year = max(r["Year"] for r in financial_data)
+    future_years = [y for y in yrs if y > max_year]
+    if future_years:
+        forecast = True
+        horizon = min(max(y - max_year for y in future_years), 5)
+        yrs = [y for y in yrs if y <= max_year]
+
+    return companies, yrs, metrics, forecast, horizon
 
 # ----------------- Data utilities -----------------
 def to_millions(value):
     if value is None:
         return None
     try:
-        v = float(value)
-        return v / 1e6
+        return float(value) / 1e6
     except Exception:
         return None
 
@@ -206,33 +225,6 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
     return combo, chart
 
 # ----------------- Chatbot core -----------------
-def parse_query(query: str):
-    query = correct_spelling(query)
-    parsed = parse_with_llm(query)
-    if parsed:
-        comps = parsed["companies"] or extract_companies_basic(query)
-        yrs = parsed["years"] or extract_years_basic(query)
-        mets = parsed["metrics"] or extract_metrics_basic(query)
-        forecast = parsed["forecast"] or ("forecast" in query.lower() or "predict" in query.lower())
-        horizon = parsed["horizon"]
-    else:
-        comps = extract_companies_basic(query)
-        yrs = extract_years_basic(query)
-        mets = extract_metrics_basic(query)
-        forecast = ("forecast" in query.lower() or "predict" in query.lower())
-        horizon = 2
-
-    # 🔹 Auto-detect future years (beyond dataset)
-    if yrs:
-        max_year = max(r["Year"] for r in financial_data)
-        future_years = [y for y in yrs if y > max_year]
-        if future_years:
-            forecast = True
-            horizon = max(y - max_year for y in future_years)
-            yrs = [y for y in yrs if y <= max_year]
-
-    return comps, yrs, mets, forecast, horizon
-
 def respond(query: str):
     comps, yrs, mets, do_forecast, horizon = parse_query(query)
 
@@ -241,10 +233,9 @@ def respond(query: str):
     if not comps:
         return "⚠️ Please mention at least one company (Microsoft, Tesla, or Apple).", None, None
 
-    # 🔹 Multi-company & multi-metric with forecast
+    # Forecast case (Option B: multi-company & multi-metric)
     if do_forecast:
-        charts = []
-        results = []
+        charts, results = [], []
         for comp in comps:
             df = get_company_year_df([comp], yrs, mets)
             if df.empty:
@@ -255,8 +246,7 @@ def respond(query: str):
                     charts.append(fchart)
                     results.append(combo)
         if charts:
-            final_chart = alt.vconcat(*charts)
-            return pd.concat(results, ignore_index=True), final_chart, None
+            return pd.concat(results, ignore_index=True), alt.vconcat(*charts), None
         else:
             return "No forecast could be generated.", None, None
 
@@ -307,10 +297,13 @@ st.title("💬 Financial Data Chatbot — LLM + Forecasting")
 
 st.markdown(
     """
-    Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for **Microsoft, Tesla, Apple** (2022–2024). 
-    Try natural questions like *"Apple 2023 profit"*, *"Compare Tesla vs Microsoft sales"*, or *"Forecast Apple revenue next 2 years"*.
-    
-    **Note:** All values shown in **millions**. Spelling mistakes will be auto-corrected when possible. Future years beyond dataset are treated as forecasts. Multiple companies and metrics can be forecasted together.
+    Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for **Microsoft, Tesla, Apple** (2022–2024).  
+    Try natural queries like:  
+    - *"aape assets in 2024"* ✅ corrected to Apple  
+    - *"predict net in come of applein 2025"* ✅ corrected + forecast  
+    - *"forecast Tesla and Apple liabilities and assets next 2 years"* ✅ multi-company, multi-metric  
+
+    **Note:** All values shown in **millions**. Spelling mistakes will be auto-corrected where possible.
     """
 )
 
