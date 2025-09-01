@@ -187,8 +187,11 @@ def forecast_linear(df: pd.DataFrame, company: str, metric: str, horizon: int = 
 def parse_query(query: str):
     clean = correct_spelling(query)
     clean_low = clean.lower()
+
+    # ✅ support ranges like "from 2023 to 2026"
     yrs_range = extract_year_range(clean_low)
-    yrs_text = extract_years_basic(clean_low) if yrs_range is None else yrs_range
+    yrs_text = yrs_range if yrs_range else extract_years_basic(clean_low)
+
     horizon_text = extract_horizon(clean_low)
     comps_text = extract_companies_basic(clean)
     mets_text = extract_metrics_basic(clean)
@@ -196,18 +199,35 @@ def parse_query(query: str):
     forecast_flag = "forecast" in clean_low or "predict" in clean_low or "next" in clean_low
     horizon = horizon_text or 2 if forecast_flag else 0
 
-    dataset_max = max(r["Year"] for r in financial_data)
-    if yrs_text and max(yrs_text) > dataset_max:
-        if max(yrs_text) > 2034:
-            return [], [], [], False, 0, f"⚠️ I can only forecast up to 2034."
-        forecast_flag = True
+    # ✅ Year validation
+    if yrs_text:
+        if max(yrs_text) > 2040:
+            return [], [], [], False, 0, "⚠️ Sorry, I can only forecast up to 2040."
+        if min(yrs_text) < 2022:
+            return [], [], [], False, 0, "⚠️ Sorry, I only have data from 2022 onwards."
 
-    for c in comps_text:
-        if c not in VALID_COMPANIES:
-            return [], [], [], False, 0, f"⚠️ Sorry, I only have data for Microsoft, Tesla, and Apple."
+    # ✅ Unsupported companies
+    for word in query.split():
+        if word.lower() not in VALID_COMPANIES_LOWER and word.title() not in VALID_COMPANIES:
+            return [], [], [], False, 0, "⚠️ Sorry, I only have data for Microsoft, Tesla, and Apple."
 
     return comps_text, yrs_text, mets_text, forecast_flag, horizon, None
 
+
+# ----------------- UI -----------------
+for q, r in st.session_state.history:
+    st.markdown(f"**🧑 You:** {q}")
+    if isinstance(r, tuple):
+        df, chart, note = r
+        if isinstance(df, pd.DataFrame):
+            # ✅ Hide default index, only show "S.No"
+            st.dataframe(df.style.hide(axis="index"), use_container_width=True)
+        if chart is not None: 
+            st.altair_chart(chart, use_container_width=True)
+        if note: 
+            st.info(note)
+    else:
+        st.warning(r)
 def respond(query: str):
     comps, yrs, mets, do_forecast, horizon, error_msg = parse_query(query)
     if error_msg: return error_msg, None, None
@@ -274,4 +294,5 @@ if query:
     answer = respond(query)
     st.session_state.history.append((query, answer))
     st.rerun()
+
 
