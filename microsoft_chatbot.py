@@ -224,6 +224,16 @@ def parse_query(query: str):
         mets = extract_metrics_basic(query)
         forecast = ("forecast" in query.lower() or "predict" in query.lower())
         horizon = 2
+
+    # 🔹 Auto-detect future years (beyond dataset)
+    if yrs:
+        max_year = max(r["Year"] for r in financial_data)
+        future_years = [y for y in yrs if y > max_year]
+        if future_years:
+            forecast = True
+            horizon = max(y - max_year for y in future_years)
+            yrs = [y for y in yrs if y <= max_year]
+
     return comps, yrs, mets, forecast, horizon
 
 def respond(query: str):
@@ -288,7 +298,7 @@ st.markdown(
     Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for **Microsoft, Tesla, Apple** (2022–2024). 
     Try natural questions like *"Apple 2023 profit"*, *"Compare Tesla vs Microsoft sales"*, or *"Forecast Apple revenue next 2 years"*.
     
-    **Note:** All values shown in **millions**. Spelling mistakes will be auto-corrected when possible.
+    **Note:** All values shown in **millions**. Spelling mistakes will be auto-corrected when possible. Future years beyond dataset are treated as forecasts.
     """
 )
 
