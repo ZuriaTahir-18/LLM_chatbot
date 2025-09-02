@@ -3,6 +3,11 @@ import re
 import pandas as pd
 import numpy as np
 import altair as alt
+from transformers import pipeline
+
+# Load the LLM once
+
+llm = pipeline("text2text-generation", model="google/flan-t5-small")
 
 # --- Optional: Spell checker ---
 try:
@@ -191,8 +196,20 @@ def normalize_company(name: str) -> str | None:
 #     except Exception:
 #         return None
 
+
+
 # ----------------- Respond -----------------
+
+
+def preprocess_query(query: str) -> str:
+    prompt = f"Correct spelling mistakes and simplify this financial query: {query}"
+    response = llm(prompt, max_length=64, num_return_sequences=1)
+    return response[0]["generated_text"]
+
 def respond(query: str):
+
+    query = preprocess_query(query)
+    
     comps, mets, yrs, next_n, error = parse_query(query)
     if error:
         return error, None
