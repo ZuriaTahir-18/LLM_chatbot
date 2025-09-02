@@ -70,6 +70,15 @@ SYNONYMS = {
     "Cash Flow": {"cash flow", "cashflow", "operating cash flow", "cash"},
 }
 
+VALID_COMPANIES = {"Microsoft", "Tesla", "Apple"}
+
+COMPANY_SYNONYMS = {
+    "Apple": {"apple", "appl", "appe", "app"},
+    "Tesla": {"tesla", "tesl", "tesa", "tessla"},
+    "Microsoft": {"microsoft", "micro", "msft", "microsftv", "micosoft"},
+}
+
+
 # ----------------- Utilities -----------------
 def to_millions(value):
     return float(value)/1e6 if value is not None else None
@@ -156,23 +165,37 @@ def parse_query(query:str):
         else "⚠️ Please specify revenue, net income, assets, liabilities, or cash flow."
     )
 
-def generate_summary(df, llm=LLM):
-    if llm is None or df is None or not isinstance(df, pd.DataFrame) or df.empty:
-        return None
-    # small, clean table to text
-    try:
-        sample = df.head(50).to_string(index=False)
-        prompt = f"Summarize this financial data in 2 sentences. Focus on trends and any forecast vs actual:\n{sample}"
-        result = llm(prompt, max_length=150, do_sample=False)[0]['generated_text']
-        return result
-    except Exception:
-        return None
+
+def normalize_company(name: str) -> str | None:
+    name_lower = name.lower()
+    for canonical, synonyms in COMPANY_SYNONYMS.items():
+        if name_lower == canonical.lower() or name_lower in synonyms:
+            return canonical
+    return None  # if not found
+
+    companies_found = []
+    for token in tokens:  # however you’re splitting/extracting
+        comp = normalize_company(token)
+        if comp:
+            companies_found.append(comp)
+
+# def generate_summary(df, llm=LLM):
+#     if llm is None or df is None or not isinstance(df, pd.DataFrame) or df.empty:
+#         return None
+#     # small, clean table to text
+#     try:
+#         sample = df.head(50).to_string(index=False)
+#         prompt = f"Summarize this financial data in 2 sentences. Focus on trends and any forecast vs actual:\n{sample}"
+#         result = llm(prompt, max_length=150, do_sample=False)[0]['generated_text']
+#         return result
+#     except Exception:
+#         return None
 
 # ----------------- Respond -----------------
 def respond(query: str):
     comps, mets, yrs, next_n, error = parse_query(query)
     if error:
-        return error, None, None
+        return error, None
 
     # Dataset year bounds
     earliest_year, latest_year, max_forecast_year = 2022, 2024, 2034
@@ -279,9 +302,9 @@ def respond(query: str):
     )
 
     # ---------------- Summary ----------------
-    summary = generate_summary(df_all_long)
+    # summary = generate_summary(df_all_long)
 
-    return df_out, chart, summary
+    return df_out, chart
 
 # ----------------- Streamlit UI -----------------
 st.set_page_config(page_title="💬 Financial Chatbot", page_icon="💹", layout="wide")
@@ -320,15 +343,15 @@ for q, r in st.session_state.history:
         st.write(q)
     with st.chat_message("assistant"):
         if isinstance(r, tuple):
-            df, chart, summary = r
+            df, chart = r
             if isinstance(df, pd.DataFrame):
                 st.dataframe(df, use_container_width=True, hide_index=True)  # 🔒 hide index column
             if chart is not None:
                 st.altair_chart(chart, use_container_width=True)
             # Show summary inside expander (no blue info box)
-            if summary:
-                with st.expander("AI Summary"):
-                    st.write(summary)
+            # if summary:
+            #     with st.expander("AI Summary"):
+            #         st.write(summary)
         else:
             st.warning(r)
 
@@ -348,4 +371,3 @@ if query:
 # Show last query (so user sees what they asked even if chat_input clears)
 if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
-
