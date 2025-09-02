@@ -305,7 +305,7 @@ st.markdown("""
 Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for  
 **Microsoft, Tesla, and Apple (2022–2024)** 📊  
 ⚡ Values in **millions**. Forecast up to **2034** using **Linear Regression**.  
-💡 Try: *"Apple and Tesla cash flow in next 3 years"*
+
 """)
 
 # Chat history (kept)
@@ -348,3 +348,4 @@ if query:
 # Show last query (so user sees what they asked even if chat_input clears)
 if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
+
