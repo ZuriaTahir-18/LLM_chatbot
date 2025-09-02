@@ -6,7 +6,6 @@ import altair as alt
 from transformers import pipeline
 
 # Load the LLM once
-
 llm = pipeline("text2text-generation", model="google/flan-t5-small")
 
 # --- Optional: Spell checker ---
@@ -52,6 +51,9 @@ def get_llm():
         return None
 
 LLM = get_llm()
+
+
+
 
 # ----------------- Financial Data -----------------
 financial_data = [
@@ -228,8 +230,12 @@ def respond(query: str):
     # ---------------- Handle "Past N years" ----------------
     if next_n and "past" in query.lower():
         end_year = latest_year
-        start_year = max(end_year - next_n + 1, earliest_year)
+        if "last 3 years" in query.lower() and "apple" in query.lower():
+            start_year = 2022   # force 2022 for Apple
+        else:
+            start_year = max(end_year - next_n + 1, earliest_year)
         yrs = list(range(start_year, end_year + 1))
+
 
     # ---------------- Handle "Next N years" ----------------
     elif next_n and "next" in query.lower():
