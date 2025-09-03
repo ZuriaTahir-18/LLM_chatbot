@@ -40,19 +40,31 @@ try:
     _HAS_TRANSFORMERS = True
 except Exception:
     _HAS_TRANSFORMERS = False
+    
+def get_llm():
+    if _HAS_TRANSFORMERS:
+        return pipeline("text-generation", model="gpt2")  # example model
+    return None
+
+LLM = get_llm()   # 👈 pehle yahan initialize karna hoga
+
 
 @st.cache_resource(show_spinner=False)
-def get_llm():
-    if not _HAS_TRANSFORMERS:
+# --- Proper LLM Summarizer ---
+def generate_summary(df, query, llm=LLM):
+    if llm is None or df is None or df.empty:
         return None
+    
     try:
-        return pipeline("text2text-generation", model="google/flan-t5-small")
+        sample = df.head(20).to_string(index=False)
+        prompt = f"""You are a financial assistant. 
+User asked: {query}
+Here is the financial data:\n{sample}\n
+Give a short clear answer (2–3 sentences) about the trend, including forecast if present."""
+        result = llm(prompt, max_length=120, do_sample=False)[0]['generated_text']
+        return result
     except Exception:
         return None
-
-LLM = get_llm()
-
-
 
 
 # ----------------- Financial Data -----------------
@@ -71,7 +83,7 @@ financial_data = [
 VALID_COMPANIES = {"Microsoft", "Tesla", "Apple"}
 SYNONYMS = {
     "Total Revenue": {"revenue", "sales", "turnover", "income from sales"},
-    "Net Income": {"net income", "profit", "earnings", "net profit"},
+    "Net Income": {"net income", "profit", "earnings", "net profit" },
     "Total Assets": {"assets", "total assets", "asset"},
     "Total Liabilities": {"liabilities", "debt", "debts", "obligations"},
     "Cash Flow": {"cash flow", "cashflow", "operating cash flow", "cash"},
@@ -186,17 +198,17 @@ def normalize_company(name: str) -> str | None:
         if comp:
             companies_found.append(comp)
 
-# def generate_summary(df, llm=LLM):
-#     if llm is None or df is None or not isinstance(df, pd.DataFrame) or df.empty:
-#         return None
-#     # small, clean table to text
-#     try:
-#         sample = df.head(50).to_string(index=False)
-#         prompt = f"Summarize this financial data in 2 sentences. Focus on trends and any forecast vs actual:\n{sample}"
-#         result = llm(prompt, max_length=150, do_sample=False)[0]['generated_text']
-#         return result
-#     except Exception:
-#         return None
+def generate_summary(df, llm=LLM):
+    if llm is None or df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return None
+    # small, clean table to text
+    try:
+        sample = df.head(50).to_string(index=False)
+        prompt = f"Summarize this financial data in 2 sentences. Focus on trends and any forecast vs actual:\n{sample}"
+        result = llm(prompt, max_length=150, do_sample=False)[0]['generated_text']
+        return result
+    except Exception:
+        return None
 
 
 
@@ -209,62 +221,54 @@ def preprocess_query(query: str) -> str:
     return response[0]["generated_text"]
 
 def respond(query: str):
+    # --- Skip LLM preprocessing ---
+    # query = preprocess_query(query)  # ❌ Removed
 
-    query = preprocess_query(query)
+    # --- Extract companies, metrics, and years ---
+    comps_raw, mets, yrs, next_n, error = parse_query(query)
     
-    comps, mets, yrs, next_n, error = parse_query(query)
-    if error:
-        return error, None
+    # Normalize company names
+    comps = []
+    for c in comps_raw or []:
+        nc = normalize_company(c)
+        if nc and nc not in comps:
+            comps.append(nc)
 
-    # Dataset year bounds
+    if error:
+        return error, None, None
+
     earliest_year, latest_year, max_forecast_year = 2022, 2024, 2034
 
-    # ---------------- Year Validation ----------------
-    if yrs:
-        for year in yrs:
-            if year < earliest_year or year > max_forecast_year:
-                return f"⚠️ Sorry, data is only available between **{earliest_year} and {max_forecast_year}**. You entered {year}.", None, None
-
+    # Validate explicit years
     yrs = yrs or []
-
-    # ---------------- Handle "Past N years" ----------------
-    if next_n and "past" in query.lower():
-        end_year = latest_year
-        if "last 3 years" in query.lower() and "apple" in query.lower():
-            start_year = 2022   # force 2022 for Apple
-        else:
-            start_year = max(end_year - next_n + 1, earliest_year)
-        yrs = list(range(start_year, end_year + 1))
-
-
-    # ---------------- Handle "Next N years" ----------------
-    elif next_n and "next" in query.lower():
-        start_year = latest_year + 1
-        yrs = list(range(start_year, min(start_year + next_n - 1, max_forecast_year) + 1))
-
-    # ---------------- Validate again ----------------
     invalid_years = [y for y in yrs if y < earliest_year or y > max_forecast_year]
     if invalid_years:
         return f"⚠️ Please enter years between {earliest_year} and {max_forecast_year}. Invalid: {invalid_years}", None, None
 
-    # ---------------- Split Years ----------------
+    # Handle "Past N years"
+    if next_n and "past" in query.lower():
+        end_year = latest_year
+        start_year = max(end_year - next_n + 1, earliest_year)
+        yrs = list(range(start_year, end_year + 1))
+
+    # Handle "Next N years"
+    elif next_n and "next" in query.lower():
+        start_year = latest_year + 1
+        yrs = list(range(start_year, min(start_year + next_n - 1, max_forecast_year) + 1))
+
+    # Split historical and future years
     hist_years_req = [y for y in yrs if y <= latest_year]
     fut_years_req = [y for y in yrs if y > latest_year]
 
-    # Always include previous year for comparison
-    all_hist_years = set(hist_years_req)
-    for y in hist_years_req:
-        if y - 1 >= earliest_year:
-            all_hist_years.add(y - 1)
-    all_hist_years = sorted(all_hist_years)
+    # Ensure at least 2 historical points for forecasting
+    if len(hist_years_req) < 2:
+        hist_years_req = sorted(list(set(hist_years_req + [latest_year-1, latest_year])))
+        hist_years_req = [y for y in hist_years_req if y >= earliest_year and y <= latest_year]
 
-    # If user asked only “next N years”, show recent actuals (2023, 2024) for context
-    if not hist_years_req and fut_years_req:
-        all_hist_years = [max(latest_year - 1, earliest_year), latest_year]
+    all_hist_years = sorted(hist_years_req)
 
-    # ---------------- Historical DF ----------------
+    # Historical DF
     df_hist_wide = get_company_year_df(comps, all_hist_years, mets)
-
     if not df_hist_wide.empty:
         df_hist_long = df_hist_wide.melt(
             id_vars=["Company", "Year"],
@@ -276,7 +280,7 @@ def respond(query: str):
     else:
         df_hist_long = pd.DataFrame(columns=["Company","Year","Metric","Value","Type"])
 
-    # ---------------- Forecast DF ----------------
+    # Forecast DF
     forecast_frames = []
     if fut_years_req:
         for comp in comps:
@@ -284,50 +288,36 @@ def respond(query: str):
                 fc = forecast_linear(df_hist_wide[["Company","Year", *mets]], comp, metric, fut_years_req)
                 if fc is not None and not fc.empty:
                     forecast_frames.append(fc)
-
     df_forecast_long = pd.concat(forecast_frames, ignore_index=True) if forecast_frames else pd.DataFrame(columns=["Company","Year","Metric","Value","Type"])
 
-    # ---------------- Combine ----------------
+    # Combine
     df_all_long = pd.concat([df_hist_long, df_forecast_long], ignore_index=True)
     df_out = add_serial_column(df_all_long)
 
-    # ---------------- Chart ----------------
+    # Chart
     base = alt.Chart(df_all_long).encode(
         x=alt.X("Year:O", title="Year"),
         y=alt.Y("Value:Q", title="Value (mn)"),
         color=alt.Color("Company:N", title="Company")
     )
-
-    bars = base.transform_filter(
-        alt.datum.Type == "Actual"
-    ).mark_bar().encode(
+    bars = base.transform_filter(alt.datum.Type == "Actual").mark_bar().encode(
         tooltip=["Company","Metric","Year","Type",alt.Tooltip("Value:Q", title="Value (mn)")]
     )
-
-    line = base.transform_filter(
-        alt.datum.Type == "Forecast"
-    ).mark_line(strokeDash=[6,4]).encode(
+    line = base.transform_filter(alt.datum.Type == "Forecast").mark_line(strokeDash=[6,4]).encode(
         tooltip=["Company","Metric","Year","Type",alt.Tooltip("Value:Q", title="Value (mn)")]
     )
-
-    points = base.transform_filter(
-        alt.datum.Type == "Forecast"
-    ).mark_point().encode(
+    points = base.transform_filter(alt.datum.Type == "Forecast").mark_point().encode(
         tooltip=["Company","Metric","Year","Type",alt.Tooltip("Value:Q", title="Value (mn)")]
     )
-
     chart = alt.layer(bars, line, points).facet(
         column=alt.Column("Metric:N", header=alt.Header(title=""))
-    ).resolve_scale(
-        y='independent'
-    ).properties(
-        title=f"{', '.join(comps)} — {', '.join(mets)} (mn)"
-    )
+    ).resolve_scale(y='independent').properties(title=f"{', '.join(comps)} — {', '.join(mets)} (mn)")
 
-    # ---------------- Summary ----------------
-    # summary = generate_summary(df_all_long)
+    # Summary
+    summary = generate_summary(df_all_long, query)
 
-    return df_out, chart
+    return df_out, chart, summary
+
 
 # ----------------- Streamlit UI -----------------
 st.set_page_config(page_title="💬 Financial Chatbot", page_icon="💹", layout="wide")
@@ -354,42 +344,67 @@ Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for
 
 """)
 
-# Chat history (kept)
+# ----------------- Session State -----------------
 if "history" not in st.session_state:
     st.session_state.history = []
 if "last_query" not in st.session_state:
     st.session_state.last_query = ""
 
-# Show chat bubbles/history
-for q, r in st.session_state.history:
+# ----------------- Display Chat History -----------------
+for q, ans in st.session_state.history:
     with st.chat_message("user"):
         st.write(q)
     with st.chat_message("assistant"):
-        if isinstance(r, tuple):
-            df, chart = r
+        if isinstance(ans, tuple):
+            df, chart, *rest = ans
+            summary = rest[0] if rest else None
             if isinstance(df, pd.DataFrame):
-                st.dataframe(df, use_container_width=True, hide_index=True)  # 🔒 hide index column
+                st.dataframe(df, use_container_width=True, hide_index=True)
             if chart is not None:
                 st.altair_chart(chart, use_container_width=True)
-            # Show summary inside expander (no blue info box)
-            # if summary:
-            #     with st.expander("AI Summary"):
-            #         st.write(summary)
+            if summary:
+                with st.expander("💡 AI Insight"):
+                    st.write(summary)
         else:
-            st.warning(r)
+            st.warning(ans)
 
-# Input (kept as chat_input to avoid removing feature)
+# ----------------- Input New Query -----------------
 query = st.chat_input("💡 Ask your question here…")
 if query:
-    st.session_state.last_query = query  # remember last text
+    st.session_state.last_query = query
     with st.chat_message("user"):
         st.write(query)
+
     with st.status("Processing…", expanded=False) as status:
-        answer = respond(query)
+        answer = respond(query)  # 👈 get the chatbot response
         st.session_state.history.append((query, answer))
         status.update(label="Done", state="complete", expanded=False)
-    # rerun to render the new response but chat_input will be blank (Streamlit behavior)
+
+    # ----------------- Display Assistant Response -----------------
+    # Display Assistant Response
+   
+    with st.chat_message("assistant"):
+        if isinstance(answer, tuple):
+            df, chart, summary = answer  # direct unpacking
+
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                st.dataframe(df, use_container_width=True, hide_index=True)
+
+            if chart is not None:
+                st.altair_chart(chart, use_container_width=True)
+
+            if summary:  # always check summary separately
+                with st.expander("💡 AI Insight"):
+                    st.write(summary)
+        else:
+            st.warning(answer)
+
+
     st.rerun()
+
+# ----------------- Show Last Query -----------------
+if st.session_state.last_query:
+    st.caption(f"Last query: *{st.session_state.last_query}*")
 
 # Show last query (so user sees what they asked even if chat_input clears)
 if st.session_state.last_query:
