@@ -313,24 +313,32 @@ def respond(query: str):
     df_all_long = pd.concat([df_hist_long, df_forecast_long], ignore_index=True)
     df_out = add_serial_column(df_all_long)
 
-        # Chart
+           # ----------------- Chart -----------------
+    chart_type = st.selectbox(
+        "📊 Select Chart Type",
+        ["Bar", "Line", "Area"],
+        key="chart_type_selector"
+    )
+
     base = alt.Chart(df_all_long).encode(
         x=alt.X("Year:O", title="Year"),
         y=alt.Y("Value:Q", title="Value (mn)"),
-        color=alt.Color("Company:N", title="Company")
-    )
-    bars = base.transform_filter(alt.datum.Type == "Actual").mark_bar().encode(
+        color=alt.Color("Company:N", title="Company"),
         tooltip=["Company","Metric","Year","Type",alt.Tooltip("Value:Q", title="Value (mn)")]
     )
-    line = base.transform_filter(alt.datum.Type == "Forecast").mark_line(strokeDash=[6,4]).encode(
-        tooltip=["Company","Metric","Year","Type",alt.Tooltip("Value:Q", title="Value (mn)")]
-    )
-    points = base.transform_filter(alt.datum.Type == "Forecast").mark_point().encode(
-        tooltip=["Company","Metric","Year","Type",alt.Tooltip("Value:Q", title="Value (mn)")]
-    )
-    chart = alt.layer(bars, line, points).facet(
+
+    if chart_type == "Bar":
+        chart = base.mark_bar()
+    elif chart_type == "Line":
+        chart = base.mark_line(point=True)
+    elif chart_type == "Area":
+        chart = base.mark_area(opacity=0.6)
+
+    chart = chart.facet(
         column=alt.Column("Metric:N", header=alt.Header(title=""))
-    ).resolve_scale(y='independent').properties(title=f"{', '.join(comps)} — {', '.join(mets)} (mn)")
+    ).resolve_scale(y="independent").properties(
+        title=f"{', '.join(comps)} — {', '.join(mets)} ({chart_type} chart, mn)"
+    )
 
     # # Summary
     # summary = generate_summary(df_all_long, query)
@@ -427,6 +435,7 @@ if query:
 # Show last query (so user sees what they asked even if chat_input clears)
 if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
+
 
 
 
