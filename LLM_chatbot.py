@@ -331,12 +331,16 @@ if st.button("Test LLM"):
             st.error(f"❌ LLM failed to generate output: {e}")
 
 st.markdown("""
-🚀 **Your Smart Finance Assistant**  
-Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for  
-**Microsoft, Tesla, and Apple (2022–2024)** 📊  
-⚡ Values in **millions**. Forecast up to **2034** using **Linear Regression**.  
+st.markdown("""
+💡 **Financial Insights at Your Fingertips**  
+
+Easily explore and compare the financial performance of **Microsoft, Tesla, and Apple**.  
+Track key metrics like **Revenue, Net Income, Assets, Liabilities, and Cash Flow** (values shown in **millions**).  
+
+📈 Built-in forecasting extends trends up to **2034** using **Linear Regression**, helping you see future patterns.  
 
 """)
+
 
 # ----------------- Session State -----------------
 if "history" not in st.session_state:
@@ -406,3 +410,4 @@ if st.session_state.last_query:
 # Show last query (so user sees what they asked even if chat_input clears)
 if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
+
