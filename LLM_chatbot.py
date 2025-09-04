@@ -1,7 +1,3 @@
-
-import torch
-
-
 import streamlit as st
 import re
 import pandas as pd
@@ -9,15 +5,8 @@ import numpy as np
 import altair as alt
 from transformers import pipeline
 
-
 # Load the LLM once
-llm_small = pipeline("text2text-generation", model="google/flan-t5-small")
-# llm_big = pipeline("text2text-generation", model="google/flan-t5-large", device=0)
-
-# # instead of flan-t5
-# llm_big = pipeline("summarization", model="facebook/bart-large-cnn", device=0)
-
-
+llm = pipeline("text2text-generation", model="google/flan-t5-small")
 
 # --- Optional: Spell checker ---
 try:
@@ -44,43 +33,38 @@ def correct_spelling(text: str) -> str:
             fixed = correction.capitalize() if w[:1].isupper() else correction
         corrected.append(word.replace(w, fixed if correction else w))
     return " ".join(corrected)
+
+# --- Optional: LLM via Hugging Face ---
+try:
+    from transformers import pipeline
+    _HAS_TRANSFORMERS = True
+except Exception:
+    _HAS_TRANSFORMERS = False
+    
+def get_llm():
+    if _HAS_TRANSFORMERS:
+        return pipeline("text-generation", model="gpt2")  # example model
+    return None
+
+LLM = get_llm()   # 👈 pehle yahan initialize karna hoga
+
+
 # @st.cache_resource(show_spinner=False)
-# def generate_summary(df, query, llm=llm_big):
+# # --- Proper LLM Summarizer ---
+# def generate_summary(df, query, llm=LLM):
 #     if llm is None or df is None or df.empty:
 #         return None
-
+    
 #     try:
-#         # convert dataframe rows into facts
-#         facts = []
-#         for _, row in df.iterrows():
-#             facts.append(f"{row['Company']} {row['Year']} {row['Metric']}: {row['Value']}")
-#         fact_text = "; ".join(facts)
-
-#         # new short prompt (no noisy repetition)
-#         summary_prompt = f"""
-#         The user asked: {query}.
-#         Based on the data: {fact_text}.
-#         Write 2–3 sentences highlighting trend (increase/decrease/stable).
-#         Mention forecast briefly if available.
-#         """
-
-#         # summarizer
-#         result = llm(
-#             summary_prompt,
-#             max_length=80,
-#             min_length=30,
-#             do_sample=False
-#         )[0]['summary_text']
-
-#         # cleanup: keep at most 3 sentences
-#         sentences = result.split(". ")
-#         summary = ". ".join(sentences[:3])
-#         if not summary.endswith("."):
-#             summary += "."
-#         return summary
-
-#     except Exception as e:
-#         return f"⚠️ Summary generation failed: {e}"
+#         sample = df.head(20).to_string(index=False)
+#         prompt = f"""You are a financial assistant. 
+# User asked: {query}
+# Here is the financial data:\n{sample}\n
+# Give a short clear answer (2–3 sentences) about the trend, including forecast if present."""
+#         result = llm(prompt, max_length=120, do_sample=False)[0]['generated_text']
+#         return result
+#     except Exception:
+#         return None
 
 
 # ----------------- Financial Data -----------------
@@ -236,12 +220,14 @@ def extract_companies_from_query(query: str) -> list[str]:
 
 def preprocess_query(query: str) -> str:
     prompt = f"Correct spelling mistakes and simplify this financial query: {query}"
-    response = llm_small(prompt, max_length=64, num_return_sequences=1)
+    response = llm(prompt, max_length=64, num_return_sequences=1)
     return response[0]["generated_text"]
 
-def respond(query: str, chart_type: str = "Bar"):
-    comps_raw, mets, yrs, next_n, error = parse_query(query)
+def respond(query: str):
 
+    # --- Skip LLM preprocessing ---
+    comps_raw, mets, yrs, next_n, error = parse_query(query)
+    
     # Normalize company names
     comps = []
     for c in comps_raw or []:
@@ -250,29 +236,35 @@ def respond(query: str, chart_type: str = "Bar"):
             comps.append(nc)
 
     if error:
-        return error, None, None
+        return error, None, None, None
 
     earliest_year, latest_year, max_forecast_year = 2022, 2024, 2034
+
+    # Validate explicit years
     yrs = yrs or []
     invalid_years = [y for y in yrs if y < earliest_year or y > max_forecast_year]
     if invalid_years:
-        return f"⚠️ Please enter years between {earliest_year} and {max_forecast_year}. Invalid: {invalid_years}", None, None
+        return f"⚠️ Please enter years between {earliest_year} and {max_forecast_year}. Invalid: {invalid_years}", None, None, None
 
-    # Handle "Past/Next N years"
+    # Handle "Past N years"
     if next_n and "past" in query.lower():
         end_year = latest_year
         start_year = max(end_year - next_n + 1, earliest_year)
         yrs = list(range(start_year, end_year + 1))
+
+    # Handle "Next N years"
     elif next_n and "next" in query.lower():
         start_year = latest_year + 1
         yrs = list(range(start_year, min(start_year + next_n - 1, max_forecast_year) + 1))
 
-    # Split years
+    # Split historical and future years
     hist_years_req = [y for y in yrs if y <= latest_year]
     fut_years_req = [y for y in yrs if y > latest_year]
 
+    # Ensure at least 2 historical points for forecasting
     if len(hist_years_req) < 2:
         hist_years_req = sorted(list(set(hist_years_req + [latest_year-1, latest_year])))
+        hist_years_req = [y for y in hist_years_req if earliest_year <= y <= latest_year]
 
     all_hist_years = sorted(hist_years_req)
 
@@ -299,33 +291,26 @@ def respond(query: str, chart_type: str = "Bar"):
                     forecast_frames.append(fc)
     df_forecast_long = pd.concat(forecast_frames, ignore_index=True) if forecast_frames else pd.DataFrame(columns=["Company","Year","Metric","Value","Type"])
 
-    # Combine
+       # Combine
     df_all_long = pd.concat([df_hist_long, df_forecast_long], ignore_index=True)
     df_out = add_serial_column(df_all_long)
 
-    # ----------------- Chart -----------------
-    base = alt.Chart(df_all_long).encode(
-        x=alt.X("Year:O", title="Year"),
-        y=alt.Y("Value:Q", title="Value (mn)"),
-        color=alt.Color("Company:N", title="Company"),
-        tooltip=["Company","Metric","Year","Type",alt.Tooltip("Value:Q", title="Value (mn)")]
-    )
+    # ----------------- Default Chart (Bar) -----------------
+    chart = None
+    if not df_all_long.empty:
+        base = alt.Chart(df_all_long).encode(
+            x=alt.X("Year:O", title="Year"),
+            y=alt.Y("Value:Q", title="Value (mn)"),
+            color=alt.Color("Company:N", title="Company"),
+            tooltip=["Company","Metric","Year","Type",alt.Tooltip("Value:Q", title="Value (mn)")]
+        )
+        chart = base.mark_bar().facet(
+            column=alt.Column("Metric:N", header=alt.Header(title=""))
+        ).resolve_scale(y='independent').properties(
+            title=f"{', '.join(comps)} — {', '.join(mets)} (Bar Chart, mn)"
+        )
 
-    if chart_type == "Bar":
-        chart = base.mark_bar()
-    elif chart_type == "Line":
-        chart = base.mark_line(point=True)
-    elif chart_type == "Area":
-        chart = base.mark_area(opacity=0.6)
-
-    chart = chart.facet(
-        column=alt.Column("Metric:N", header=alt.Header(title=""))
-    ).resolve_scale(y="independent").properties(
-        title=f"{', '.join(comps)} — {', '.join(mets)} ({chart_type} chart, mn)"
-    )
-    # # Summary 
-    # summary = generate_summary(df_all_long, query)
-    return df_out, chart, None
+    return df_out, chart, comps, mets, df_all_long
 
 
 # ----------------- Streamlit UI -----------------
@@ -334,12 +319,12 @@ st.title("💹 AI-Powered Financial Data Chatbot")
 
 # --- LLM Test Button (kept) ---
 if st.button("Test LLM"):
-    if llm_small is None:
+    if LLM is None:
         st.error("❌ LLM is not loaded. Check transformers/torch installation.")
     else:
         prompt = "Summarize: Microsoft revenue increased in 2023."
         try:
-            output = llm_small(prompt, max_length=50, do_sample=False)[0]['generated_text']
+            output = LLM(prompt, max_length=50, do_sample=False)[0]['generated_text']
             st.success("✅ LLM is working!")
             # st.caption(f"LLM output: {output}")
         except Exception as e:
@@ -349,19 +334,17 @@ st.markdown("""
 🚀 **Your Smart Finance Assistant**  
 Ask about **Revenue, Net Income, Assets, Liabilities, or Cash Flow** for  
 **Microsoft, Tesla, and Apple (2022–2024)** 📊  
-⚡ Values in **millions**. Forecast up to **2034** using **Linear Regressionnnnn**.  
+⚡ Values in **millions**. Forecast up to **2034** using **Linear Regression**.  
 
 """)
 
 # ----------------- Session State -----------------
-
+if "history" not in st.session_state:
+    st.session_state.history = []
 if "last_query" not in st.session_state:
     st.session_state.last_query = ""
 
 # ----------------- Display Chat History -----------------
-if "history" not in st.session_state:
-    st.session_state.history = []
-
 for q, ans in st.session_state.history:
     with st.chat_message("user"):
         st.write(q)
@@ -381,12 +364,6 @@ for q, ans in st.session_state.history:
 
 # ----------------- Input New Query -----------------
 
-# ----------------- Chart Type Selector -----------------
-chart_type = st.selectbox(
-    "📊 Select Chart Type",
-    ["Bar", "Line", "Area"],
-    key="chart_type_selector"
-)
 
 query = st.chat_input("💡 Ask your question here…")
 if query:
@@ -395,40 +372,37 @@ if query:
         st.write(query)
 
     with st.status("Processing…", expanded=False) as status:
-        answer = respond(query, chart_type)  
-              # 👈 get the chatbot response
+        answer = respond(query)  # 👈 get the chatbot response (default bar)
         st.session_state.history.append((query, answer))
         status.update(label="Done", state="complete", expanded=False)
 
     # ----------------- Display Assistant Response -----------------
-    # Display Assistant Response
-   
+        # ----------------- Display Assistant Response -----------------
     with st.chat_message("assistant"):
         if isinstance(answer, tuple):
-            df, chart ,summary= answer  # direct unpacking
+            df, chart, comps, mets, df_all_long = answer  
 
             if isinstance(df, pd.DataFrame) and not df.empty:
                 st.dataframe(df, use_container_width=True, hide_index=True)
 
             if chart is not None:
+                st.subheader("📊 Chart")
                 st.altair_chart(chart, use_container_width=True)
-
-            if summary:  # always check summary separately
-                with st.expander("💡 AI Insight"):
-                    st.write(summary)
         else:
             st.warning(answer)
+
+            # if summary:  # always check summary separately
+            #     with st.expander("💡 AI Insight"):
+            #         st.write(summary)
+
 
 
     st.rerun()
 
+# ----------------- Show Last Query -----------------
+if st.session_state.last_query:
+    st.caption(f"Last query: *{st.session_state.last_query}*")
 
 # Show last query (so user sees what they asked even if chat_input clears)
 if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
-
-
-
-
-
-
