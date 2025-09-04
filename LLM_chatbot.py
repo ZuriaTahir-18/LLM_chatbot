@@ -239,13 +239,9 @@ def preprocess_query(query: str) -> str:
     response = llm_small(prompt, max_length=64, num_return_sequences=1)
     return response[0]["generated_text"]
 
-def respond(query: str):
-    # --- Skip LLM preprocessing ---
-    # query = preprocess_query(query)  # ❌ Removed
-
-    # --- Extract companies, metrics, and years ---
+def respond(query: str, chart_type: str = "Bar"):
     comps_raw, mets, yrs, next_n, error = parse_query(query)
-    
+
     # Normalize company names
     comps = []
     for c in comps_raw or []:
@@ -257,32 +253,26 @@ def respond(query: str):
         return error, None, None
 
     earliest_year, latest_year, max_forecast_year = 2022, 2024, 2034
-
-    # Validate explicit years
     yrs = yrs or []
     invalid_years = [y for y in yrs if y < earliest_year or y > max_forecast_year]
     if invalid_years:
         return f"⚠️ Please enter years between {earliest_year} and {max_forecast_year}. Invalid: {invalid_years}", None, None
 
-    # Handle "Past N years"
+    # Handle "Past/Next N years"
     if next_n and "past" in query.lower():
         end_year = latest_year
         start_year = max(end_year - next_n + 1, earliest_year)
         yrs = list(range(start_year, end_year + 1))
-
-    # Handle "Next N years"
     elif next_n and "next" in query.lower():
         start_year = latest_year + 1
         yrs = list(range(start_year, min(start_year + next_n - 1, max_forecast_year) + 1))
 
-    # Split historical and future years
+    # Split years
     hist_years_req = [y for y in yrs if y <= latest_year]
     fut_years_req = [y for y in yrs if y > latest_year]
 
-    # Ensure at least 2 historical points for forecasting
     if len(hist_years_req) < 2:
         hist_years_req = sorted(list(set(hist_years_req + [latest_year-1, latest_year])))
-        hist_years_req = [y for y in hist_years_req if y >= earliest_year and y <= latest_year]
 
     all_hist_years = sorted(hist_years_req)
 
@@ -313,13 +303,7 @@ def respond(query: str):
     df_all_long = pd.concat([df_hist_long, df_forecast_long], ignore_index=True)
     df_out = add_serial_column(df_all_long)
 
-           # ----------------- Chart -----------------
-    chart_type = st.selectbox(
-        "📊 Select Chart Type",
-        ["Bar", "Line", "Area"],
-        key="chart_type_selector"
-    )
-
+    # ----------------- Chart -----------------
     base = alt.Chart(df_all_long).encode(
         x=alt.X("Year:O", title="Year"),
         y=alt.Y("Value:Q", title="Value (mn)"),
@@ -339,10 +323,8 @@ def respond(query: str):
     ).resolve_scale(y="independent").properties(
         title=f"{', '.join(comps)} — {', '.join(mets)} ({chart_type} chart, mn)"
     )
-
-    # # Summary
+    # # Summary 
     # summary = generate_summary(df_all_long, query)
-
     return df_out, chart, None
 
 
@@ -398,6 +380,14 @@ for q, ans in st.session_state.history:
             st.warning(ans)
 
 # ----------------- Input New Query -----------------
+
+# ----------------- Chart Type Selector -----------------
+chart_type = st.selectbox(
+    "📊 Select Chart Type",
+    ["Bar", "Line", "Area"],
+    key="chart_type_selector"
+)
+
 query = st.chat_input("💡 Ask your question here…")
 if query:
     st.session_state.last_query = query
@@ -405,7 +395,8 @@ if query:
         st.write(query)
 
     with st.status("Processing…", expanded=False) as status:
-        answer = respond(query)  # 👈 get the chatbot response
+        answer = respond(query, chart_type)  
+              # 👈 get the chatbot response
         st.session_state.history.append((query, answer))
         status.update(label="Done", state="complete", expanded=False)
 
@@ -435,6 +426,7 @@ if query:
 # Show last query (so user sees what they asked even if chat_input clears)
 if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
+
 
 
 
