@@ -1,41 +1,35 @@
-# 💹 AI-Powered Financial Data Chatbot  
+# 💹 Financial Data Chatbot  
 
-An interactive **Streamlit application** that allows users to query, analyze, and visualize the **financial performance** of major companies such as **Microsoft, Tesla, and Apple**.  
-The chatbot supports **natural language queries**, generates **data tables and charts**, and provides an **LLM-powered summary** for quick insights.  
+An interactive Streamlit-based chatbot to explore and forecast the financial performance of **Microsoft, Tesla, and Apple**.  
+The chatbot helps users query key metrics like **Revenue, Net Income, Assets, Liabilities, and Cash Flow**, with historical data (2022–2024) and **Linear Regression forecasts up to 2034**.  
 
 ---
 
 ## 🚀 Features  
-
-- **Natural Language Queries**  
-  - Example: *"Apple sales in 2023"*, *"Tesla net income in past 2 years"*, *"Microsoft assets next 3 years"*  
-- **Timeframe Handling**  
-  - Works with **specific years (2022–2034)**  
-  - Understands *"past N years"* and *"next N years"* queries  
-  - Adds **previous year for comparison automatically**  
-- **Data Visualization**  
-  - **Bars** for historical values  
-  - **Dashed line + points** for forecast values  
-  - Metrics shown **side by side** with independent scales  
-- **Forecasting**  
-  - Historical data (2022–2024)  
-  - Linear forecast up to 2034  
-- **LLM-Powered Insights**  
-  - Simple English summaries of results  
+- 📊 Compare **Revenue, Net Income, Assets, Liabilities, and Cash Flow** across companies.  
+- ⏳ Access historical data (2022–2024).  
+- 🔮 Forecast financial metrics up to **2034** using Linear Regression.  
+- 💡 User-friendly chatbot interface powered by Streamlit.  
 
 ---
 
-## 🛠 Installation  
+## 🛠️ Technologies  
+- **Python**  
+- **Streamlit** (interactive UI)  
+- **Pandas & NumPy** (data handling)  
+- **Altair** (visualizations)  
+- **scikit-learn** (Linear Regression for forecasting)  
+- **Hugging Face Transformers** (optional LLM support for query preprocessing)  
 
-1. **Clone the repository**  
-   ```bash
-   git clone https://github.com/your-username/financial-chatbot.git
-   cd financial-chatbot
+---
 
-# My Project
+## Install dependencies
 
-This is a Streamlit-based app for XYZ purpose.
+pip install -r requirements.txt
 
-🔗 **Live Demo**: https://llmchatbot-qgdt8cs6tbuyqjzf9d65a7.streamlit.app/
+✨ Author
 
+## 👩‍💻 Developed by Zuria Tahir 
+📬 Connect with me on LinkedIn www.linkedin.com/in/zuria-tahir-9b5078319
 
+# Check live demo here https://llmchatbot-pj4sljuiesjvrufpzgac3p.streamlit.app/
