@@ -313,7 +313,7 @@ def respond(query: str):
     df_all_long = pd.concat([df_hist_long, df_forecast_long], ignore_index=True)
     df_out = add_serial_column(df_all_long)
 
-    # Chart
+        # Chart
     base = alt.Chart(df_all_long).encode(
         x=alt.X("Year:O", title="Year"),
         y=alt.Y("Value:Q", title="Value (mn)"),
@@ -427,5 +427,6 @@ if query:
 # Show last query (so user sees what they asked even if chat_input clears)
 if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
+
 
 
