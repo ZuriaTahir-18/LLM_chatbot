@@ -331,7 +331,6 @@ if st.button("Test LLM"):
             st.error(f"❌ LLM failed to generate output: {e}")
 
 st.markdown("""
-st.markdown("""
 💡 **Financial Insights at Your Fingertips**  
 
 Easily explore and compare the financial performance of **Microsoft, Tesla, and Apple**.  
@@ -410,4 +409,5 @@ if st.session_state.last_query:
 # Show last query (so user sees what they asked even if chat_input clears)
 if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
+
 
