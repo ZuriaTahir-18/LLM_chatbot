@@ -406,7 +406,7 @@ if query:
    
     with st.chat_message("assistant"):
         if isinstance(answer, tuple):
-            df, chart = answer  # direct unpacking
+            df, chart ,summary= answer  # direct unpacking
 
             if isinstance(df, pd.DataFrame) and not df.empty:
                 st.dataframe(df, use_container_width=True, hide_index=True)
@@ -427,4 +427,5 @@ if query:
 # Show last query (so user sees what they asked even if chat_input clears)
 if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
+
 
