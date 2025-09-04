@@ -29,7 +29,9 @@ pip install -r requirements.txt
 
 ✨ Author
 
-## 👩‍💻 Developed by Zuria Tahir 
-📬 Connect with me on LinkedIn www.linkedin.com/in/zuria-tahir-9b5078319
+## ✨ Author  
+👩‍💻 Developed by **Zuria Tahir**  
 
-# Check live demo here https://llmchatbot-pj4sljuiesjvrufpzgac3p.streamlit.app/
+📬 Connect with me on [LinkedIn](https://www.linkedin.com/in/zuria-tahir-9b5078319)  
+
+🚀 Check live demo here: [Financial Chatbot App](https://llmchatbot-pj4sljuiesjvrufpzgac3p.streamlit.app/)  
