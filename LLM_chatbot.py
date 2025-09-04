@@ -12,10 +12,10 @@ from transformers import pipeline
 
 # Load the LLM once
 llm_small = pipeline("text2text-generation", model="google/flan-t5-small")
-llm_big = pipeline("text2text-generation", model="google/flan-t5-large", device=0)
+# llm_big = pipeline("text2text-generation", model="google/flan-t5-large", device=0)
 
-# instead of flan-t5
-llm_big = pipeline("summarization", model="facebook/bart-large-cnn", device=0)
+# # instead of flan-t5
+# llm_big = pipeline("summarization", model="facebook/bart-large-cnn", device=0)
 
 
 
@@ -426,6 +426,7 @@ if query:
 # Show last query (so user sees what they asked even if chat_input clears)
 if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
+
 
 
 
