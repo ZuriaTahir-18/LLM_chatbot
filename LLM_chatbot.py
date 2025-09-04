@@ -369,6 +369,9 @@ if "last_query" not in st.session_state:
     st.session_state.last_query = ""
 
 # ----------------- Display Chat History -----------------
+if "history" not in st.session_state:
+    st.session_state.history = []
+
 for q, ans in st.session_state.history:
     with st.chat_message("user"):
         st.write(q)
@@ -424,3 +427,4 @@ if query:
 # Show last query (so user sees what they asked even if chat_input clears)
 if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
+
