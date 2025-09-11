@@ -235,7 +235,7 @@ def preprocess_query(query: str) -> str:
 
 def respond(query: str):
     comps_raw, mets, yrs, next_n, past_n, error = parse_query(query)
-    
+
     # Normalize company names
     comps = []
     for c in comps_raw or []:
@@ -243,7 +243,7 @@ def respond(query: str):
         if nc and nc not in comps:
             comps.append(nc)
 
-  if error:
+    if error:
         return pd.DataFrame(), None, comps, mets, pd.DataFrame()
 
     earliest_year, latest_year, max_forecast_year = 2022, 2024, 2034
@@ -261,19 +261,19 @@ def respond(query: str):
         end_year = min(start_year + next_n - 1, max_forecast_year)
         yrs = list(range(start_year, end_year + 1))
 
-    # Filter years
+    # Filter valid years
     yrs = [y for y in yrs if earliest_year <= y <= max_forecast_year]
 
-    # Split historical vs future
+    # Split historical vs future years
     hist_years_req = [y for y in yrs if y <= latest_year]
     fut_years_req = [y for y in yrs if y > latest_year]
 
-    # Ensure at least 2 points for forecast training
-    if len(hist_years_req) < 2 and hist_years_req:
+    # Ensure at least 2 historical years for forecasting
+    if len(hist_years_req) < 2:
         hist_years_req = sorted(list(set(hist_years_req + [latest_year - 1, latest_year])))
         hist_years_req = [y for y in hist_years_req if earliest_year <= y <= latest_year]
 
-    # Historical data
+    # Historical DF
     df_hist_wide = get_company_year_df(comps, hist_years_req, mets)
     if not df_hist_wide.empty:
         df_hist_long = df_hist_wide.melt(
@@ -286,7 +286,7 @@ def respond(query: str):
     else:
         df_hist_long = pd.DataFrame(columns=["Company", "Year", "Metric", "Value", "Type"])
 
-    # Forecast data
+    # Forecast DF
     forecast_frames = []
     if fut_years_req:
         for comp in comps:
@@ -294,7 +294,10 @@ def respond(query: str):
                 fc = forecast_linear(df_hist_wide[["Company", "Year", *mets]], comp, metric, fut_years_req)
                 if fc is not None and not fc.empty:
                     forecast_frames.append(fc)
-    df_forecast_long = pd.concat(forecast_frames, ignore_index=True) if forecast_frames else pd.DataFrame(columns=["Company","Year","Metric","Value","Type"])
+
+    df_forecast_long = pd.concat(forecast_frames, ignore_index=True) if forecast_frames else pd.DataFrame(
+        columns=["Company", "Year", "Metric", "Value", "Type"]
+    )
 
     # Combine
     df_all_long = pd.concat([df_hist_long, df_forecast_long], ignore_index=True)
@@ -307,11 +310,11 @@ def respond(query: str):
             x=alt.X("Year:O", title="Year"),
             y=alt.Y("Value:Q", title="Value (mn)"),
             color=alt.Color("Company:N", title="Company"),
-            tooltip=["Company","Metric","Year","Type", alt.Tooltip("Value:Q", title="Value (mn)")]
+            tooltip=["Company", "Metric", "Year", "Type", alt.Tooltip("Value:Q", title="Value (mn)")]
         )
         chart = base.mark_bar().facet(
             column=alt.Column("Metric:N", header=alt.Header(title=""))
-        ).resolve_scale(y='independent').properties(
+        ).resolve_scale(y="independent").properties(
             title=f"{', '.join(comps)} — {', '.join(mets)} (Bar Chart, mn)"
         )
 
@@ -413,6 +416,7 @@ if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
 
 # Show last query (so user sees what they asked even if chat_input clears)
+
 
 
 
