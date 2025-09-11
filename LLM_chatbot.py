@@ -236,7 +236,7 @@ def respond(query: str):
             comps.append(nc)
 
     if error:
-        return error, None, None, None
+        return error, None, None, None, None
 
     earliest_year, latest_year, max_forecast_year = 2022, 2024, 2034
 
@@ -407,4 +407,5 @@ if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
 
 # Show last query (so user sees what they asked even if chat_input clears)
+
 
