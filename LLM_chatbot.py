@@ -236,7 +236,7 @@ def respond(query: str):
             comps.append(nc)
 
     if error:
-        return error, None, None, None, None
+        return None, None, None, None, None , error
 
     earliest_year, latest_year, max_forecast_year = 2022, 2024, 2034
 
@@ -244,7 +244,7 @@ def respond(query: str):
     yrs = yrs or []
     invalid_years = [y for y in yrs if y < earliest_year or y > max_forecast_year]
     if invalid_years:
-        return f"⚠️ Please enter years between {earliest_year} and {max_forecast_year}. Invalid: {invalid_years}", None, None, None
+        return None, None, None, None, None, f"⚠️ Please enter years between {earliest_year} and {max_forecast_year}. Invalid: {invalid_years}", None, None, None
 
     # Handle "Past N years"
     if next_n and "past" in query.lower():
@@ -310,7 +310,7 @@ def respond(query: str):
             title=f"{', '.join(comps)} — {', '.join(mets)} (Bar Chart, mn)"
         )
 
-    return df_out, chart, comps, mets, df_all_long
+    return df_out, chart, comps, mets, df_all_long , None 
 
 
 # ----------------- Streamlit UI -----------------
@@ -407,5 +407,6 @@ if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
 
 # Show last query (so user sees what they asked even if chat_input clears)
+
 
 
