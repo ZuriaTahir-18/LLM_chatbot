@@ -163,23 +163,33 @@ def extract_years_basic(query:str):
 
 def extract_next_n_years(query: str):
     low = query.lower()
-    # patterns: "next 3 years", "next year", "coming 2 years", "upcoming 5 years"
+    # next N years
     m = re.search(r"\b(next|coming|upcoming)\s+(\d+)\s+year", low)
     if m:
         return int(m.group(2))
-    # "next year" singular
     if re.search(r"\b(next|coming|upcoming)\s+year\b", low):
         return 1
     return 0
-
-def parse_query(query:str):
+def extract_past_n_years(query: str):
+    low = query.lower()
+    # past N years / previous N years
+    m = re.search(r"\b(past|previous|last)\s+(\d+)\s+year", low)
+    if m:
+        return int(m.group(2))
+    if re.search(r"\b(past|previous|last)\s+year\b", low):
+        return 1
+    return 0
+    
+def parse_query(query: str):
     q_fixed = correct_spelling(query)
     comps = extract_companies_basic(q_fixed)
     metrics = extract_metrics_basic(q_fixed)
     years = extract_years_basic(q_fixed)
     next_n = extract_next_n_years(q_fixed)
-    return comps, metrics, years, next_n, None if (comps and metrics) else (
-        None, None, None, None,
+    past_n = extract_past_n_years(q_fixed)
+
+    return comps, metrics, years, next_n, past_n, None if (comps and metrics) else (
+        None, None, None, None, None,
         "⚠️ Sorry, I only have data for Microsoft, Tesla, and Apple." if not comps
         else "⚠️ Please specify revenue, net income, assets, liabilities, or cash flow."
     )
@@ -224,8 +234,8 @@ def preprocess_query(query: str) -> str:
     return response[0]["generated_text"]
 
 def respond(query: str):
-    comps_raw, mets, yrs, next_n, error = parse_query(query)
-
+    comps_raw, mets, yrs, next_n, past_n, error = parse_query(query)
+    
     # Normalize company names
     comps = []
     for c in comps_raw or []:
@@ -233,25 +243,25 @@ def respond(query: str):
         if nc and nc not in comps:
             comps.append(nc)
 
-    if error:
+  if error:
         return pd.DataFrame(), None, comps, mets, pd.DataFrame()
 
     earliest_year, latest_year, max_forecast_year = 2022, 2024, 2034
     yrs = yrs or []
 
-    # Handle "Past N years"
-    if next_n and "past" in query.lower():
+    # Past N years
+    if past_n:
         end_year = latest_year
-        start_year = max(end_year - next_n + 1, earliest_year)
+        start_year = max(end_year - past_n + 1, earliest_year)
         yrs = list(range(start_year, end_year + 1))
 
-    # Handle "Next N years"
-    elif next_n and "next" in query.lower():
+    # Next N years
+    elif next_n:
         start_year = latest_year + 1
         end_year = min(start_year + next_n - 1, max_forecast_year)
         yrs = list(range(start_year, end_year + 1))
 
-    # Filter years inside valid range
+    # Filter years
     yrs = [y for y in yrs if earliest_year <= y <= max_forecast_year]
 
     # Split historical vs future
@@ -403,6 +413,7 @@ if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
 
 # Show last query (so user sees what they asked even if chat_input clears)
+
 
 
 
