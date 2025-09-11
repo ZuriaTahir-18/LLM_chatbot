@@ -224,10 +224,8 @@ def preprocess_query(query: str) -> str:
     return response[0]["generated_text"]
 
 def respond(query: str):
-
-    # --- Skip LLM preprocessing ---
     comps_raw, mets, yrs, next_n, error = parse_query(query)
-    
+
     # Normalize company names
     comps = []
     for c in comps_raw or []:
@@ -236,15 +234,10 @@ def respond(query: str):
             comps.append(nc)
 
     if error:
-        return None, None, None, None, None , error
+        return pd.DataFrame(), None, comps, mets, pd.DataFrame()
 
     earliest_year, latest_year, max_forecast_year = 2022, 2024, 2034
-
-    # Validate explicit years
     yrs = yrs or []
-    invalid_years = [y for y in yrs if y < earliest_year or y > max_forecast_year]
-    if invalid_years:
-        return None, None, None, None, None, f"⚠️ Please enter years between {earliest_year} and {max_forecast_year}. Invalid: {invalid_years}", None, None, None
 
     # Handle "Past N years"
     if next_n and "past" in query.lower():
@@ -255,21 +248,23 @@ def respond(query: str):
     # Handle "Next N years"
     elif next_n and "next" in query.lower():
         start_year = latest_year + 1
-        yrs = list(range(start_year, min(start_year + next_n - 1, max_forecast_year) + 1))
+        end_year = min(start_year + next_n - 1, max_forecast_year)
+        yrs = list(range(start_year, end_year + 1))
 
-    # Split historical and future years
+    # Filter years inside valid range
+    yrs = [y for y in yrs if earliest_year <= y <= max_forecast_year]
+
+    # Split historical vs future
     hist_years_req = [y for y in yrs if y <= latest_year]
     fut_years_req = [y for y in yrs if y > latest_year]
 
-    # Ensure at least 2 historical points for forecasting
-    if len(hist_years_req) < 2:
-        hist_years_req = sorted(list(set(hist_years_req + [latest_year-1, latest_year])))
+    # Ensure at least 2 points for forecast training
+    if len(hist_years_req) < 2 and hist_years_req:
+        hist_years_req = sorted(list(set(hist_years_req + [latest_year - 1, latest_year])))
         hist_years_req = [y for y in hist_years_req if earliest_year <= y <= latest_year]
 
-    all_hist_years = sorted(hist_years_req)
-
-    # Historical DF
-    df_hist_wide = get_company_year_df(comps, all_hist_years, mets)
+    # Historical data
+    df_hist_wide = get_company_year_df(comps, hist_years_req, mets)
     if not df_hist_wide.empty:
         df_hist_long = df_hist_wide.melt(
             id_vars=["Company", "Year"],
@@ -279,30 +274,30 @@ def respond(query: str):
         )
         df_hist_long["Type"] = "Actual"
     else:
-        df_hist_long = pd.DataFrame(columns=["Company","Year","Metric","Value","Type"])
+        df_hist_long = pd.DataFrame(columns=["Company", "Year", "Metric", "Value", "Type"])
 
-    # Forecast DF
+    # Forecast data
     forecast_frames = []
     if fut_years_req:
         for comp in comps:
             for metric in mets:
-                fc = forecast_linear(df_hist_wide[["Company","Year", *mets]], comp, metric, fut_years_req)
+                fc = forecast_linear(df_hist_wide[["Company", "Year", *mets]], comp, metric, fut_years_req)
                 if fc is not None and not fc.empty:
                     forecast_frames.append(fc)
     df_forecast_long = pd.concat(forecast_frames, ignore_index=True) if forecast_frames else pd.DataFrame(columns=["Company","Year","Metric","Value","Type"])
 
-       # Combine
+    # Combine
     df_all_long = pd.concat([df_hist_long, df_forecast_long], ignore_index=True)
     df_out = add_serial_column(df_all_long)
 
-    # ----------------- Default Chart (Bar) -----------------
+    # Chart
     chart = None
     if not df_all_long.empty:
         base = alt.Chart(df_all_long).encode(
             x=alt.X("Year:O", title="Year"),
             y=alt.Y("Value:Q", title="Value (mn)"),
             color=alt.Color("Company:N", title="Company"),
-            tooltip=["Company","Metric","Year","Type",alt.Tooltip("Value:Q", title="Value (mn)")]
+            tooltip=["Company","Metric","Year","Type", alt.Tooltip("Value:Q", title="Value (mn)")]
         )
         chart = base.mark_bar().facet(
             column=alt.Column("Metric:N", header=alt.Header(title=""))
@@ -310,7 +305,8 @@ def respond(query: str):
             title=f"{', '.join(comps)} — {', '.join(mets)} (Bar Chart, mn)"
         )
 
-    return df_out, chart, comps, mets, df_all_long , None 
+    return df_out, chart, comps, mets, df_all_long
+
 
 
 # ----------------- Streamlit UI -----------------
@@ -407,6 +403,7 @@ if st.session_state.last_query:
     st.caption(f"Last query: *{st.session_state.last_query}*")
 
 # Show last query (so user sees what they asked even if chat_input clears)
+
 
 
 
