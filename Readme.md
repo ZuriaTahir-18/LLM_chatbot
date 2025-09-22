@@ -1,3 +1,8 @@
+## 🎥 Demo
+
+![Demo](./demo/llmdemo.gif)
+
+
 # 💹 Financial Data Chatbot  
 
 An interactive Streamlit-based chatbot to explore and forecast the financial performance of **Microsoft, Tesla, and Apple**.  
